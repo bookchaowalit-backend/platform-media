@@ -138,3 +138,15 @@ database and NOSUPERUSER NOBYPASSRLS role, applies migrations as its admin, gran
 the runtime schema, then connects the application only as that restricted role.
 The fixture drops its database and role at teardown. No manual database/role
 preprovisioning is required. A second API pool uses that same restricted DSN.
+
+## Effective runtime grants
+
+Readiness checks schema USAGE and migration-history SELECT, then checks every
+required business-table privilege individually before reporting ready. Missing
+grants return 503 without changing provider, migration or FORCE RLS gates.
+
+- `media_files`: SELECT, INSERT, UPDATE.
+
+No DELETE/TRUNCATE grant is required by this readiness gate.
+Real PostgreSQL LOGIN-role regressions revoke and restore each required grant
+and verify that the minimal runtime grant set remains ready.

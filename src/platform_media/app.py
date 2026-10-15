@@ -11,6 +11,11 @@ from platform_backend_core import create_app as core_app, require_scope
 from .adapters import ObjectStore
 
 
+# Effective privileges used by runtime SQL; append-only effects need INSERT only.
+READINESS_PERMISSIONS = {
+    "media_files": ("SELECT", "INSERT", "UPDATE"),
+}
+
 class Upload(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     filename: str = Field(min_length=1, max_length=255, pattern=r"^[^\x00-\x1f/\\]+$")
@@ -91,6 +96,20 @@ def create_app(database, verifier, object_store: ObjectStore | None = None):
             from .migrations import MIGRATIONS
 
             with transaction(database, UUID(int=0)) as conn:
+                allowed = conn.execute(
+                    "SELECT has_schema_privilege(current_user,'public','USAGE') AS allowed"
+                ).fetchone()["allowed"]
+                if not allowed:
+                    raise ValueError("schema privilege unavailable")
+                permissions = {"platform_schema_migrations": ("SELECT",), **READINESS_PERMISSIONS}
+                for table, privileges in permissions.items():
+                    for privilege in privileges:
+                        allowed = conn.execute(
+                            "SELECT has_table_privilege(current_user,%s,%s) AS allowed",
+                            ("public." + table, privilege),
+                        ).fetchone()["allowed"]
+                        if not allowed:
+                            raise ValueError("runtime privilege unavailable")
                 history = conn.execute(
                     "SELECT version,checksum FROM platform_schema_migrations WHERE namespace=%s",
                     ("platform_media",),
