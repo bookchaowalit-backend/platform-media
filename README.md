@@ -76,6 +76,12 @@ compares this contract with the parent platform registry (local only; read-only)
 The check does not claim deployment, provider connectivity, data migration, or
 production readiness.
 
+Hosted CI explicitly reports the six optional Edge integration cases as
+unavailable while retaining the original graphics contract/unit checks and the
+shared PostgreSQL API suite. A separate manual Windows renderer gate rejects any
+skipped renderer case. See [CI and renderer acceptance](docs/ci-renderer-gates.md);
+a green Shared runtime check does not mean renderer acceptance passed.
+
 ## Migration gate
 
 Before activating a remote or changing a consumer, add sanitized fixtures for

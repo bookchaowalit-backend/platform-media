@@ -80,3 +80,38 @@ database and NOSUPERUSER NOBYPASSRLS role, applies migrations as its admin, gran
 the runtime schema, then connects the application only as that restricted role.
 The fixture drops its database and role at teardown. No manual database/role
 preprovisioning is required. A second API pool uses that same restricted DSN.
+
+## Hosted CI renderer environment correction
+
+The supplied failing Shared runtime run 38701556273 reported 84 passed, 5 skipped
+and one Edge integration failure (two subtests passed). The browser was discovered
+but aborted during sandbox initialization, exit -6 with no screenshot and stderr
+referencing edge-sandbox ownership/mode 4755. Full runner metadata was unavailable;
+this local correction does not claim to repair that browser installation.
+The new runtime workflow had omitted the existing Check workflow's explicit
+BOOK_MEDIA_SKIP_RENDERER_TESTS setting for an unreviewed hosted renderer environment.
+
+The hosted runtime now uses the same narrowly scoped optional-renderer setting,
+prints skip reasons with pytest -rs, runs the original scripts/check.sh and writes
+a visible renderer-unavailable job summary. Original graphics contract/unit,
+locking and PostgreSQL API tests remain enabled. A separate workflow_dispatch
+Windows job runs a strict renderer-only launcher: any skipped/failed case or no
+discovered cases fails acceptance. Skip/update-goldens flags are refused. Shipping
+source, original test cases, sandbox flags, golden files and host security are
+unchanged. See [CI and renderer gates](ci-renderer-gates.md).
+
+Local Python 3.12 validation with the hosted settings and explicit disposable
+fixture-admin DSN: full pytest passed 84, skipped 6, with two subtests passed;
+original check ran 81 tests, passed 75, skipped 6. YAML parsing and command-scope
+assertions passed. git diff confirms no changes under book_media_platform, src
+or tests. The strict renderer launcher returned 1, explicitly UNAVAILABLE, on
+this Linux host: five cases need missing Edge and one needs Windows process-tree
+support. Separate checks confirmed both bypass flags are refused. That expected
+unavailable result is not renderer acceptance.
+
+No supported Windows/Edge/font environment was executed here. No remote workflow
+rerun, push, deployment, provider request or host-security mutation occurred.
+Parent must review/push the CI change and observe its remote result; the separate
+manual renderer gate remains unverified until all six cases execute and pass on
+a matching environment. No shipping wheel rebuild or release-artifact replacement
+was performed for this CI-only correction.

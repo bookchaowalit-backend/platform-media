@@ -25,6 +25,9 @@ jobs:
           --health-retries 10
     env:
       PLATFORM_TEST_DSN: dbname=postgres user=postgres host=127.0.0.1 port=5432
+      # Only the six optional Edge integration cases read this existing flag.
+      # All graphics contracts/unit tests and PostgreSQL API tests still run.
+      BOOK_MEDIA_SKIP_RENDERER_TESTS: "1"
     steps:
       - uses: actions/checkout@v4
         with:
@@ -36,7 +39,19 @@ jobs:
         run: |
           python -m pip install 'platform-backend-core @ git+https://github.com/bookchaowalit-backend/platform-backend-core.git@d00e0119c2e47da3942d9c7b4b88828953f8bc5a'
           python -m pip install -e '.[test]'
-      - name: Test against disposable restricted PostgreSQL roles
-        run: python -m pytest -q
+      - name: Report optional renderer environment unavailable
+        run: |
+          cat >> "$GITHUB_STEP_SUMMARY" <<'SUMMARY'
+          ### Renderer acceptance: unavailable on this hosted Linux job
+          The media API, PostgreSQL isolation, schema and original graphics contract/unit checks run here.
+          Six optional Edge integration cases are explicitly skipped with BOOK_MEDIA_SKIP_RENDERER_TESTS=1.
+          Hosted Edge discovery previously reached a sandbox initialization abort (exit -6); this job does not change sandbox flags, ownership, permissions or host security.
+          Renderer acceptance is not passed by a green Shared runtime job. Run the separate manual Optional graphics renderer workflow on Windows; its gate rejects any skipped renderer case.
+          See docs/ci-renderer-gates.md for prerequisites and remaining acceptance evidence.
+          SUMMARY
+      - name: Run original schema and graphics contract checks
+        run: bash scripts/check.sh
+      - name: Test media API and graphics contracts with explicit renderer skips
+        run: python -m pytest -q -rs
       - name: Build service wheel
         run: python -m pip wheel --no-deps --wheel-dir dist .
