@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "platform-media"
+version = "0.1.0"
+description = "Workspace-bound durable media API"
+requires-python = ">=3.12"
+license = "Apache-2.0"
+dependencies = ["platform-backend-core>=0.1.0,<0.2", "uvicorn>=0.30,<1", "boto3>=1.40,<2"]
+
+[project.optional-dependencies]
+test = ["pytest>=8,<10", "httpx>=0.27,<1"]
+
+[project.scripts]
+platform-media = "platform_media.__main__:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests", "runtime_tests"]
+pythonpath = ["src", "."]
+
+[tool.setuptools]
+packages = ["platform_media", "book_media_platform", "book_media_platform.graphics"]
+package-dir = {"platform_media" = "src/platform_media", "book_media_platform" = "book_media_platform"}
