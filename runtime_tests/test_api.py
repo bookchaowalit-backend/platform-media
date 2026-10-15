@@ -5,34 +5,38 @@ from fastapi.testclient import TestClient
 
 
 @pytest.fixture
-def runtime():
+def runtime(monkeypatch):
     from platform_backend_core import Database, MigrationRunner, Principal
     from platform_media import create_app, MIGRATIONS
 
     dsn = os.environ.get("PLATFORM_TEST_DSN")
     if not dsn:
-        pytest.skip("PLATFORM_TEST_DSN required: real non-superuser PostgreSQL")
-    MigrationRunner(dsn, namespace="platform_media").apply(MIGRATIONS)
-    db = Database(dsn, max_size=8)
-    workspace = uuid4()
+        pytest.skip("PLATFORM_TEST_DSN required: disposable fixture admin PostgreSQL DSN")
+    from platform_backend_core.testing import temporary_database
+    with temporary_database(dsn, prefix="media_test_") as isolated:
+        MigrationRunner(isolated.admin_dsn, namespace="platform_media").apply(MIGRATIONS)
+        isolated.grant_schema()
+        monkeypatch.setenv("PLATFORM_TEST_DSN", isolated.runtime_dsn)
+        db = Database(isolated.runtime_dsn, max_size=8)
+        workspace = uuid4()
 
-    class Verifier:
-        def verify(self, authorization):
-            from fastapi import HTTPException
+        class Verifier:
+            def verify(self, authorization):
+                from fastapi import HTTPException
 
-            if not authorization:
-                raise HTTPException(401, "authentication required")
-            return Principal(
-                uuid4(),
-                workspace if authorization == "Bearer own" else other,
-                frozenset(["files:read", "files:write"]),
-            )
+                if not authorization:
+                    raise HTTPException(401, "authentication required")
+                return Principal(
+                    uuid4(),
+                    workspace if authorization == "Bearer own" else other,
+                    frozenset(["files:read", "files:write"]),
+                )
 
-    other = uuid4()
-    adapter = FakeStore()
-    app = create_app(db, Verifier(), object_store=adapter)
-    with TestClient(app) as client:
-        yield client, db, workspace, adapter
+        other = uuid4()
+        adapter = FakeStore()
+        app = create_app(db, Verifier(), object_store=adapter)
+        with TestClient(app) as client:
+            yield client, db, workspace, adapter
 
 
 OWN = {"Authorization": "Bearer own", "Idempotency-Key": "fixture-key"}

@@ -94,6 +94,14 @@ See [API, configuration and release runbook](docs/runtime.md) and
 Install a reviewed core wheel/revision first, then `pip install -e '.[test]'`.
 Run `python -m platform_media migrate` explicitly with `DATABASE_MIGRATION_DSN`,
 then `python -m platform_media serve` with `DATABASE_URL` and JWT configuration.
-Run `python -m pytest` with a disposable non-superuser `PLATFORM_TEST_DSN`
+Run `python -m pytest` with a disposable fixture-admin `PLATFORM_TEST_DSN`
 to exercise the complete original and new suite. Database tests explicitly skip
 when that DSN is absent. These skips do not establish durability or isolation.
+
+The program-standard `PLATFORM_TEST_DSN` is an explicitly supplied disposable
+**fixture admin** DSN with CREATE DATABASE/ROLE privileges. Each runtime fixture
+uses `platform_backend_core.testing.temporary_database` to create a unique
+database and NOSUPERUSER NOBYPASSRLS role, applies migrations as its admin, grants
+the runtime schema, then connects the application only as that restricted role.
+The fixture drops its database and role at teardown. No manual database/role
+preprovisioning is required. A second API pool uses that same restricted DSN.

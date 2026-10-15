@@ -126,8 +126,15 @@ assessment. Production cutover needs independent review and owner approval.
 ## Verification
 
 Run `bash scripts/check.sh` for the original complete graphics/contract suite,
-then `python -m pytest` with `PLATFORM_TEST_DSN` pointing at a disposable,
-service-owned non-superuser DB. New tests use real PostgreSQL and an injected
+then `python -m pytest` with `PLATFORM_TEST_DSN` pointing at a disposable fixture-admin DB. New tests use real PostgreSQL and an injected
 local object-store fixture, plus the actual boto3 signer and SDK Stubber without
 network. Do not set this DSN to production. Graphics renderer tests explicitly
 skip if Edge/Arial are unavailable; report those separately.
+
+The program-standard `PLATFORM_TEST_DSN` is an explicitly supplied disposable
+**fixture admin** DSN with CREATE DATABASE/ROLE privileges. Each runtime fixture
+uses `platform_backend_core.testing.temporary_database` to create a unique
+database and NOSUPERUSER NOBYPASSRLS role, applies migrations as its admin, grants
+the runtime schema, then connects the application only as that restricted role.
+The fixture drops its database and role at teardown. No manual database/role
+preprovisioning is required. A second API pool uses that same restricted DSN.

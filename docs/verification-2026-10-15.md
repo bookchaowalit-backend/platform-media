@@ -22,7 +22,7 @@ python -m pip wheel --no-deps --wheel-dir <disposable-wheel-output> .
 git diff --check
 ```
 
-`PLATFORM_TEST_DSN` was supplied explicitly for the service-owned disposable
+`PLATFORM_TEST_DSN` was supplied explicitly for the fixture-admin disposable
 DB; no secret-bearing local file was read. Absence of the DSN skips DB tests
 and must not be represented as isolation/durability evidence.
 
@@ -72,3 +72,11 @@ approved staging evidence. Ready-file automatic retention and orphan sweeping
 are not implemented; ready files use explicit authorized deletion. Issued URLs
 expire normally and cannot be individually revoked. Production rollout,
 backup/restore and cross-service load evidence remain parent release gates.
+
+The program-standard `PLATFORM_TEST_DSN` is an explicitly supplied disposable
+**fixture admin** DSN with CREATE DATABASE/ROLE privileges. Each runtime fixture
+uses `platform_backend_core.testing.temporary_database` to create a unique
+database and NOSUPERUSER NOBYPASSRLS role, applies migrations as its admin, grants
+the runtime schema, then connects the application only as that restricted role.
+The fixture drops its database and role at teardown. No manual database/role
+preprovisioning is required. A second API pool uses that same restricted DSN.
