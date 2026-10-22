@@ -6,7 +6,6 @@ from pathlib import Path
 
 from .errors import GraphicsError
 
-
 FONT_FILES: dict[str, tuple[str, ...]] = {
     "Arial": ("arial.ttf", "Arial.ttf", "ArialMT.ttf"),
     "Tahoma": ("tahoma.ttf", "Tahoma.ttf"),

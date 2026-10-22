@@ -10,7 +10,7 @@ import threading
 import time
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import Any, Self
 
 from .errors import ArtifactIntegrityError, GraphicsError
 from .fonts import find_font_file
@@ -314,7 +314,7 @@ class _JobLock:
             except OSError:
                 pass
 
-    def __enter__(self) -> _JobLock:
+    def __enter__(self) -> Self:
         deadline = time.monotonic() + LOCK_TIMEOUT_SECONDS
         while True:
             try:

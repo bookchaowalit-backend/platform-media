@@ -12,8 +12,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from book_media_platform.graphics import GraphicsError
-from book_media_platform.graphics import service
+from book_media_platform.graphics import GraphicsError, service
 from book_media_platform.graphics.service import _JobLock, _lock_is_stale
 
 
@@ -58,9 +57,8 @@ class StaleJobLockTests(unittest.TestCase):
 
     def test_lock_held_by_a_live_process_still_blocks(self) -> None:
         self.write_lock(pid=os.getpid(), host=socket.gethostname(), created_at=time.time())
-        with self.assertRaises(GraphicsError):
-            with _JobLock(self.lock_path):
-                pass
+        with self.assertRaises(GraphicsError), _JobLock(self.lock_path):
+            pass
         self.assertTrue(self.lock_path.exists(), "a live holder's lock must not be removed")
 
     def test_lock_from_another_host_is_respected_until_it_is_too_old(self) -> None:
@@ -125,9 +123,8 @@ class JobLockHeartbeatTests(unittest.TestCase):
             owner = json.loads(self.lock_path.read_text(encoding="utf-8"))
             owner["created_at"] = long_ago
             self.assertFalse(_lock_is_stale(owner, self.lock_path.stat().st_mtime, time.time()))
-            with self.assertRaises(GraphicsError):
-                with _JobLock(self.lock_path):
-                    pass
+            with self.assertRaises(GraphicsError), _JobLock(self.lock_path):
+                pass
         self.assertFalse(self.lock_path.exists())
 
     def test_heartbeat_thread_stops_on_release(self) -> None:

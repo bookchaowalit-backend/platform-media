@@ -13,10 +13,12 @@ def _number(value: float) -> str:
 def compile_svg(ir: GraphicIR, job: GraphicJob) -> bytes:
     canvas = ir.canvas
     out = [
-        f'<svg xmlns="http://www.w3.org/2000/svg" width="{canvas.width}" height="{canvas.height}" '
-        f'viewBox="0 0 {canvas.width} {canvas.height}" role="img" '
-        f'data-template="{html.escape(ir.template, quote=True)}" '
-        f'data-overflow-policy="{html.escape(ir.overflow_policy, quote=True)}">'
+        (
+            f'<svg xmlns="http://www.w3.org/2000/svg" width="{canvas.width}" height="{canvas.height}" '
+            f'viewBox="0 0 {canvas.width} {canvas.height}" role="img" '
+            f'data-template="{html.escape(ir.template, quote=True)}" '
+            f'data-overflow-policy="{html.escape(ir.overflow_policy, quote=True)}">'
+        )
     ]
     for node in ir.nodes:
         if isinstance(node, ShapeNode):

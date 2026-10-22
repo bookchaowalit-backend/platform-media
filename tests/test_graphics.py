@@ -12,10 +12,10 @@ import zlib
 from pathlib import Path
 from unittest.mock import patch
 
-from book_media_platform.graphics import fonts
 from book_media_platform.graphics import (
     ArtifactIntegrityError,
     GraphicsError,
+    fonts,
     load_job,
     render_batch,
 )

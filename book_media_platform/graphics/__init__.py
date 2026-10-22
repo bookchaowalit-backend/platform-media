@@ -7,12 +7,12 @@ from .service import render_batch
 from .templates import compile_graphic, fit_text
 
 __all__ = [
+    "VARIANTS",
     "ArtifactIntegrityError",
     "BatchResult",
     "GraphicIR",
     "GraphicJob",
     "GraphicsError",
-    "VARIANTS",
     "compile_graphic",
     "fit_text",
     "load_job",
