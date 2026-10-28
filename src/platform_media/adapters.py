@@ -1,4 +1,5 @@
-"""Object bytes never pass through the API. Adapters must bound network waits."""
+"""Object bytes never pass through the API, except a bounded leading range read for the
+content-type check at completion. Adapters must bound network waits."""
 
 from typing import Protocol
 from urllib.parse import urlsplit
@@ -9,6 +10,7 @@ class ObjectStore(Protocol):
         self, key: str, content_type: str, size: int, checksum: str, expires: int
     ) -> dict: ...
     def head(self, key: str) -> dict | None: ...
+    def read_prefix(self, key: str, length: int) -> bytes | None: ...
     def presign_get(self, key: str, expires: int) -> str: ...
     def delete(self, key: str) -> None: ...
 
@@ -87,6 +89,23 @@ class S3ObjectStore:
             "content_type": result.get("ContentType"),
             "checksum_sha256": result.get("ChecksumSHA256"),
         }
+
+    def read_prefix(self, key, length):
+        from botocore.exceptions import ClientError
+
+        try:
+            result = self.client.get_object(
+                Bucket=self.bucket, Key=key, Range=f"bytes=0-{length - 1}"
+            )
+        except ClientError as exc:
+            if exc.response["Error"]["Code"] in ("404", "NoSuchKey", "NotFound"):
+                return None
+            raise
+        body = result["Body"]
+        try:
+            return body.read(length)
+        finally:
+            body.close()
 
     def presign_get(self, key, expires):
         return self.client.generate_presigned_url(

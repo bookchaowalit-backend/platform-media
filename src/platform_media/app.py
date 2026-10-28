@@ -18,6 +18,44 @@ READINESS_PERMISSIONS = {
     "media_files": ("SELECT", "INSERT", "UPDATE"),
 }
 
+# Content-type gate (fixtures/gates/media-content-type.json): completion reads only
+# this many leading bytes and requires them to match the declared type.
+SIGNATURE_BYTES = 16
+
+
+def _png(prefix):
+    return prefix.startswith(b"\x89PNG\r\n\x1a\n")
+
+
+def _jpeg(prefix):
+    return prefix.startswith(b"\xff\xd8\xff")
+
+
+def _webp(prefix):
+    return prefix[:4] == b"RIFF" and prefix[8:12] == b"WEBP"
+
+
+def _pdf(prefix):
+    return prefix.startswith(b"%PDF-")
+
+
+def _text(prefix):
+    return b"\x00" not in prefix
+
+
+def _any(prefix):
+    return True
+
+
+ALLOWED_CONTENT_TYPES = {
+    "image/png": _png,
+    "image/jpeg": _jpeg,
+    "image/webp": _webp,
+    "application/pdf": _pdf,
+    "text/plain": _text,
+    "application/octet-stream": _any,
+}
+
 class Upload(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     filename: str = Field(min_length=1, max_length=255, pattern=r"^[^\x00-\x1f/\\]+$")
@@ -29,14 +67,7 @@ class Upload(BaseModel):
     @field_validator("content_type")
     @classmethod
     def safe_type(cls, value):
-        if value not in {
-            "image/png",
-            "image/jpeg",
-            "image/webp",
-            "application/pdf",
-            "text/plain",
-            "application/octet-stream",
-        }:
+        if value not in ALLOWED_CONTENT_TYPES:
             raise ValueError("unsupported content type")
         return value
 
@@ -242,6 +273,12 @@ def create_app(database, verifier, object_store: ObjectStore | None = None):
             }
             if actual is None or any(actual.get(k) != v for k, v in expected.items()):
                 raise HTTPException(409, "stored object metadata mismatch")
+            try:
+                prefix = store.read_prefix(row["object_key"], SIGNATURE_BYTES)
+            except Exception:  # noqa: BLE001 - provider errors are redacted to 503
+                raise HTTPException(503, "object store unavailable") from None
+            if prefix is None or not ALLOWED_CONTENT_TYPES[row["content_type"]](prefix):
+                raise HTTPException(409, "stored object content does not match content type")
             row = conn.execute(
                 "UPDATE media_files SET status='ready',completed_at=now() WHERE id=%s RETURNING *",
                 (identifier,),

@@ -1,0 +1,22 @@
+{
+  "gate": "content-type validation",
+  "source": "contract.json migration_gates; solo-empire repository-catalog/registries/platforms.yaml (id: media)",
+  "rule": "An upload becomes ready only when the stored bytes start with the signature of the declared content type. Declared type, size and SHA256 are already bound by the signed PUT and the HEAD check; this adds the byte-level check, so a caller cannot store HTML or script bytes under an image or PDF type.",
+  "prefix_bytes": 16,
+  "synthetic": true,
+  "cases": [
+    {"id": "png-signature", "content_type": "image/png", "prefix_hex": "89504e470d0a1a0a0000000d49484452", "accept": true},
+    {"id": "png-declared-html-bytes", "content_type": "image/png", "prefix_hex": "3c68746d6c3e3c7363726970743e", "accept": false},
+    {"id": "png-declared-jpeg-bytes", "content_type": "image/png", "prefix_hex": "ffd8ffe000104a46494600", "accept": false},
+    {"id": "png-truncated-signature", "content_type": "image/png", "prefix_hex": "89504e47", "accept": false},
+    {"id": "jpeg-signature", "content_type": "image/jpeg", "prefix_hex": "ffd8ffe000104a46494600", "accept": true},
+    {"id": "jpeg-declared-png-bytes", "content_type": "image/jpeg", "prefix_hex": "89504e470d0a1a0a0000000d49484452", "accept": false},
+    {"id": "webp-signature", "content_type": "image/webp", "prefix_hex": "52494646240000005745425056503820", "accept": true},
+    {"id": "webp-declared-riff-wave", "content_type": "image/webp", "prefix_hex": "524946462400000057415645666d7420", "accept": false},
+    {"id": "pdf-signature", "content_type": "application/pdf", "prefix_hex": "255044462d312e370a", "accept": true},
+    {"id": "pdf-declared-html-bytes", "content_type": "application/pdf", "prefix_hex": "3c68746d6c3e3c7363726970743e", "accept": false},
+    {"id": "text-plain", "content_type": "text/plain", "prefix_hex": "68656c6c6f20776f726c640a", "accept": true},
+    {"id": "text-plain-with-nul", "content_type": "text/plain", "prefix_hex": "68656c6c6f00776f726c64", "accept": false},
+    {"id": "octet-stream-any-bytes", "content_type": "application/octet-stream", "prefix_hex": "00010203", "accept": true}
+  ]
+}

@@ -1,4 +1,6 @@
+import json
 import os
+from pathlib import Path
 from uuid import uuid4
 
 import pytest
@@ -60,7 +62,12 @@ class FakeStore:
         }
 
     def head(self, key):
-        return self.objects.get(key)
+        found = self.objects.get(key)
+        return None if found is None else {k: v for k, v in found.items() if k != "prefix"}
+
+    def read_prefix(self, key, length):
+        found = self.objects.get(key)
+        return None if found is None else found.get("prefix", b"")[:length]
 
     def presign_get(self, key, expires):
         return "http://127.0.0.1/download/" + key
@@ -76,6 +83,10 @@ BODY = {
     "size": 42,
     "checksum_sha256": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
 }
+PNG_PREFIX = bytes.fromhex("89504e470d0a1a0a0000000d49484452")
+GATE = json.loads(
+    (Path(__file__).resolve().parents[1] / "fixtures/gates/media-content-type.json").read_text()
+)
 
 
 def test_upload_intent_is_bound_idempotent_and_workspace_isolated(runtime):
@@ -99,6 +110,7 @@ def test_upload_intent_is_bound_idempotent_and_workspace_isolated(runtime):
         "size": 43,
         "content_type": BODY["content_type"],
         "checksum_sha256": BODY["checksum_sha256"],
+        "prefix": PNG_PREFIX,
     }
     assert c.post(f"/v1/uploads/{file_id}/complete", headers=OWN).status_code == 409
     store.objects[key]["size"] = 42
@@ -348,3 +360,93 @@ def test_pending_upload_queue_is_bounded_per_workspace_and_replay_still_works(ru
     )
     assert c.post("/v1/uploads", json=BODY, headers=OWN).json()["id"] == first["id"]
     assert c.post("/v1/uploads", json=BODY, headers=OTHER).status_code == 201
+
+
+def _stage(c, store, content_type, idempotency_key, prefix):
+    body = {**BODY, "content_type": content_type}
+    created = c.post(
+        "/v1/uploads", json=body, headers={**OWN, "Idempotency-Key": idempotency_key}
+    )
+    assert created.status_code == 201, created.text
+    key = created.json()["upload"]["url"].split("/upload/", 1)[1]
+    store.objects[key] = {
+        "size": body["size"],
+        "content_type": content_type,
+        "checksum_sha256": body["checksum_sha256"],
+        "prefix": prefix,
+    }
+    return created.json()["id"], key
+
+
+def test_content_type_gate_fixture_covers_every_allowed_type():
+    from platform_media.app import ALLOWED_CONTENT_TYPES, SIGNATURE_BYTES
+
+    assert GATE["prefix_bytes"] == SIGNATURE_BYTES
+    assert {case["content_type"] for case in GATE["cases"]} == set(ALLOWED_CONTENT_TYPES)
+    assert {case["accept"] for case in GATE["cases"]} == {True, False}
+
+
+def test_completion_requires_stored_bytes_to_match_declared_content_type(runtime):
+    c, _db, _ws, store = runtime
+    for case in GATE["cases"]:
+        file_id, _key = _stage(
+            c, store, case["content_type"], "gate-" + case["id"], bytes.fromhex(case["prefix_hex"])
+        )
+        done = c.post(f"/v1/uploads/{file_id}/complete", headers=OWN)
+        status = c.get(f"/v1/files/{file_id}", headers=OWN).json()["status"]
+        if case["accept"]:
+            assert done.status_code == 200, case["id"]
+            assert status == "ready", case["id"]
+        else:
+            assert done.status_code == 409, case["id"]
+            assert done.json()["detail"] == "stored object content does not match content type"
+            assert status == "pending", case["id"]
+            assert c.get(f"/v1/files/{file_id}/download", headers=OWN).status_code == 409
+
+
+def test_content_check_fails_closed_on_missing_or_unreadable_bytes(runtime):
+    c, _db, _ws, store = runtime
+    file_id, _key = _stage(c, store, "image/png", "gate-unreadable", PNG_PREFIX)
+    original = store.read_prefix
+
+    def unavailable(key, length):
+        raise OSError("provider down")
+
+    store.read_prefix = unavailable
+    assert c.post(f"/v1/uploads/{file_id}/complete", headers=OWN).status_code == 503
+    store.read_prefix = lambda key, length: None
+    assert c.post(f"/v1/uploads/{file_id}/complete", headers=OWN).status_code == 409
+    store.read_prefix = original
+    assert c.get(f"/v1/files/{file_id}", headers=OWN).json()["status"] == "pending"
+    assert c.post(f"/v1/uploads/{file_id}/complete", headers=OWN).json()["status"] == "ready"
+
+
+def test_s3_adapter_reads_only_a_bounded_range_for_the_content_check():
+    import io
+
+    from botocore.response import StreamingBody
+    from botocore.stub import Stubber
+
+    from platform_media.adapters import S3ObjectStore
+
+    store = S3ObjectStore(
+        endpoint="https://objects.example.invalid",
+        bucket="synthetic",
+        access_key="synthetic-access",
+        secret_key="synthetic-secret",
+    )
+    key = str(uuid4()) + "/" + str(uuid4())
+    with Stubber(store.client) as stub:
+        stub.add_response(
+            "get_object",
+            {"Body": StreamingBody(io.BytesIO(PNG_PREFIX), len(PNG_PREFIX))},
+            {"Bucket": "synthetic", "Key": key, "Range": "bytes=0-15"},
+        )
+        assert store.read_prefix(key, 16) == PNG_PREFIX
+        stub.add_client_error(
+            "get_object",
+            service_error_code="NoSuchKey",
+            http_status_code=404,
+            expected_params={"Bucket": "synthetic", "Key": key, "Range": "bytes=0-15"},
+        )
+        assert store.read_prefix(key, 16) is None

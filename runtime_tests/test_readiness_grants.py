@@ -22,6 +22,7 @@ class LocalAdapter:
     name='fixture'
     def presign_put(self,*args):return {'url':'http://127.0.0.1/fixture','headers':{}}
     def head(self,key):return None
+    def read_prefix(self,key,length):return None
     def presign_get(self,*args):return 'http://127.0.0.1/fixture'
     def delete(self,key):pass
     def create(self,*,amount,currency,reference,idempotency_key,checkout):
