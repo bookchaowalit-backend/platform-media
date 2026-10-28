@@ -3,7 +3,7 @@
   "schema_version": "book-platform.contract.v1",
   "platform_id": "media",
   "repository": "platform-media",
-  "status": "scaffolded",
+  "status": "pilot",
   "api_version": "v1",
   "data_owner": "platform-media",
   "capabilities": [
@@ -20,8 +20,9 @@
   ],
   "current_implementation": {
     "repository": "platform-media",
-    "source_path": "book_media_platform/graphics",
+    "source_path": "src/platform_media",
     "source_paths": [
+      "src/platform_media",
       "book_media_platform/graphics"
     ],
     "source_status": "implemented-in-this-repository"
@@ -72,6 +73,23 @@
       "name": "BOOK_MEDIA_EDGE_PATH and BOOK_MEDIA_FONT_DIRS local renderer settings",
       "status": "implemented",
       "source": "book_media_platform/graphics/renderer.py"
+    },
+    {
+      "id": "media.http.v1-runtime",
+      "kind": "http",
+      "direction": "provides",
+      "name": "POST /v1/uploads; complete; GET /v1/files; metadata/download; DELETE",
+      "status": "implemented",
+      "source": "src/platform_media/app.py",
+      "auth": "Verified workspace JWT with concrete files:read/files:write scopes"
+    },
+    {
+      "id": "media.table.workspace-state",
+      "kind": "table",
+      "direction": "provides",
+      "name": "FORCE RLS PostgreSQL durable service-owned state",
+      "status": "implemented",
+      "source": "src/platform_media/migrations.py"
     }
   ]
 }

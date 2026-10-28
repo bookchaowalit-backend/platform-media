@@ -6,7 +6,7 @@ This page documents the CLI, storage and configuration surface that
 when an interface listed there is missing from this page.
 
 - Platform: `media` (contract `book-platform.contract.v1`, API `v1`)
-- Status: `scaffolded`; source status: `implemented-in-this-repository`
+- Status: `pilot`; source status: `implemented-in-this-repository`
 - Current implementation: `book_media_platform/graphics` in this repository
 - Depends on: `identity`, `security`, `observability` (not yet wired; the pilot
   is a local CLI with no network or credential use)
@@ -49,8 +49,10 @@ when an interface listed there is missing from this page.
 - `BOOK_MEDIA_FONT_DIRS` is an optional list of absolute directories (platform
   path separator) searched before the operating-system font folders; relative
   entries are ignored.
-- Signed upload, file metadata, object storage and access policy are registry
-  capabilities with no implementation yet.
+- Signed upload, file metadata and object storage are implemented locally by
+  the v1 runtime below (not deployed); the content-type gate is evidenced by
+  `fixtures/gates/media-content-type.json`. Retention policy and access-control
+  parity remain open migration gates.
 
 ## Migration gates
 
@@ -62,3 +64,15 @@ when an interface listed there is missing from this page.
 
 No production provider integration, credential, database writer or customer
 payload lives in this repository.
+
+## Implemented-local v1 API
+
+These are separate versioned routes in this owning repository; existing
+legacy compatibility surfaces above remain historical migration references.
+No legacy hub module is imported at runtime.
+
+- `media.http.v1-runtime`: POST /v1/uploads; complete; GET /v1/files; metadata/download; DELETE; source `src/platform_media/app.py`.
+- `media.table.workspace-state`: FORCE RLS PostgreSQL durable service-owned state; source `src/platform_media/migrations.py`.
+
+See [runtime contract](runtime.md) for request/response bounds, scopes, errors,
+migration instructions, provider configuration and remaining release gates.

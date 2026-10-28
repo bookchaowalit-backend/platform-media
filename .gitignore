@@ -9,3 +9,7 @@ dist/
 build/
 .runtime/
 *.py[cod]
+
+*.egg-info/
+wheelhouse/
+.venv/

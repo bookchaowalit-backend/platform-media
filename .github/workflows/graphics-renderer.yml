@@ -1,0 +1,42 @@
+name: Optional graphics renderer
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: graphics-renderer-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  renderer:
+    name: Windows renderer acceptance (no skipped cases)
+    runs-on: windows-latest
+    timeout-minutes: 20
+    env:
+      BOOK_MEDIA_SKIP_RENDERER_TESTS: "0"
+      BOOK_MEDIA_GRAPHICS_UPDATE_GOLDENS: "0"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Run all six renderer integration cases
+        id: renderer
+        run: python scripts/check_graphics_renderer.py
+      - name: Report renderer acceptance outcome
+        if: always()
+        env:
+          RENDERER_OUTCOME: ${{ steps.renderer.outcome }}
+        run: |
+          @"
+          ### Optional renderer acceptance
+          Gate outcome: $env:RENDERER_OUTCOME
+          This gate requires all six renderer cases to run and pass, including Windows process cleanup and the reviewed Edge/Arial golden fingerprints.
+          Missing prerequisites or any skipped case make the gate fail; no sandbox or host security changes are applied.
+          A workflow that has not been dispatched supplies no renderer acceptance evidence. See docs/ci-renderer-gates.md.
+          "@ | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append

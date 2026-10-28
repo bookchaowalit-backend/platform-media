@@ -5,10 +5,9 @@
 ## Scope
 
 This repository owns the `media` capability: signed upload, file metadata,
-object storage and image processing. The parent registry has no activated
-production implementation. This checkout remains scaffolded for platform
-activation; it now contains a local, deterministic Graphics V1A pilot without
-provider integration, database writes, credentials or customer payloads.
+object storage and image processing. The repository contains a separately packaged FastAPI/PostgreSQL media API and
+a local deterministic Graphics V1A pilot. The API is implemented-local;
+production activation and provider compatibility certification remain pending.
 
 ## Graphics V1A
 
@@ -40,7 +39,7 @@ only generated SVG with embedded local raster assets.
 - Repository: `platform-media`
 - Target remote: `https://github.com/bookchaowalit-backend/platform-media.git` (published; runtime not activated)
 - Contract: `book-platform.contract.v1`
-- Status: `scaffolded`
+- Status: `pilot`
 - Data owner: the platform boundary identified in `contract.json`
 
 The platform communicates through versioned API or event contracts. Consumers
@@ -77,9 +76,38 @@ compares this contract with the parent platform registry (local only; read-only)
 The check does not claim deployment, provider connectivity, data migration, or
 production readiness.
 
+Hosted CI explicitly reports the six optional Edge integration cases as
+unavailable while retaining the original graphics contract/unit checks and the
+shared PostgreSQL API suite. A separate manual Windows renderer gate rejects any
+skipped renderer case. See [CI and renderer acceptance](docs/ci-renderer-gates.md);
+a green Shared runtime check does not mean renderer acceptance passed.
+
 ## Migration gate
 
 Before activating a remote or changing a consumer, add sanitized fixtures for
 success, duplicate delivery, timeout and provider failure; prove tenant/privacy
 isolation; compare the old and new contract; and rehearse rollback on a
 disposable state store. Record the evidence in the parent platform registry.
+
+## Shared API runtime
+
+Stage: **implemented-local**, correlation `SHARED-INFRA-2026-10-15`.
+The HTTP API and explicit migrations use the separately installed
+`platform-backend-core` distribution. The hub is not a runtime dependency.
+See [API, configuration and release runbook](docs/runtime.md) and
+[local verification evidence](docs/verification-2026-10-15.md).
+
+Install a reviewed core wheel/revision first, then `pip install -e '.[test]'`.
+Run `python -m platform_media migrate` explicitly with `DATABASE_MIGRATION_DSN`,
+then `python -m platform_media serve` with `DATABASE_URL` and JWT configuration.
+Run `python -m pytest` with a disposable fixture-admin `PLATFORM_TEST_DSN`
+to exercise the complete original and new suite. Database tests explicitly skip
+when that DSN is absent. These skips do not establish durability or isolation.
+
+The program-standard `PLATFORM_TEST_DSN` is an explicitly supplied disposable
+**fixture admin** DSN with CREATE DATABASE/ROLE privileges. Each runtime fixture
+uses `platform_backend_core.testing.temporary_database` to create a unique
+database and NOSUPERUSER NOBYPASSRLS role, applies migrations as its admin, grants
+the runtime schema, then connects the application only as that restricted role.
+The fixture drops its database and role at teardown. No manual database/role
+preprovisioning is required. A second API pool uses that same restricted DSN.
