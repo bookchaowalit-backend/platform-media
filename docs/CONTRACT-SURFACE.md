@@ -49,8 +49,10 @@ when an interface listed there is missing from this page.
 - `BOOK_MEDIA_FONT_DIRS` is an optional list of absolute directories (platform
   path separator) searched before the operating-system font folders; relative
   entries are ignored.
-- Signed upload, file metadata, object storage and access policy are registry
-  capabilities with no implementation yet.
+- Signed upload, file metadata and object storage are implemented locally by
+  the v1 runtime below (not deployed); the content-type gate is evidenced by
+  `fixtures/gates/media-content-type.json`. Retention policy and access-control
+  parity remain open migration gates.
 
 ## Migration gates
 

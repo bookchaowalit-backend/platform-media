@@ -39,7 +39,8 @@ remote provider. Missing tables/migrations produce 503. Bucket networking,
 permissions and compatibility must be verified separately in approved staging.
 
 Factory: `platform_media.create_app(database, verifier, object_store=None)`.
-Adapters implement `ObjectStore` in `platform_media.adapters`. Omitting the
+Adapters implement `ObjectStore` in `platform_media.adapters`
+(`presign_put`, `head`, `read_prefix`, `presign_get`, `delete`). Omitting the
 adapter loads only the explicit environment configuration above. No hub path
 or other service's data model is imported.
 
@@ -75,8 +76,10 @@ The response does not log its signed URL.
 
 `POST /v1/uploads/{id}/complete` locks the intent, rejects expired/unknown or
 other-workspace intents, then HEADs the server-owned key and compares actual
-bytes, Content-Type and provider-computed ChecksumSHA256. Missing objects or
-mismatches return 409, provider failure 503. Only matching bytes become `ready`.
+bytes, Content-Type and provider-computed ChecksumSHA256. It then reads the
+first 16 bytes and requires the declared type's signature (see the content-type
+gate below). Missing objects or mismatches return 409 and leave the intent
+`pending`; provider failure returns 503. Only matching bytes become `ready`.
 A repeated completion of a ready intent is idempotent.
 
 `GET /v1/files?limit=50&offset=0` lists safe metadata, ordered by creation/id.
@@ -97,6 +100,32 @@ origins, PUT/GET/HEAD and the signed headers. A provider must enforce checksum
 validation, conditional PUT and return computed SHA256 on HEAD; absence fails
 completion closed. Do not weaken verification to caller-set object metadata.
 Actual R2/S3 compatibility has not been exercised here and is a staging gate.
+`read_prefix` issues one ranged GetObject (`Range: bytes=0-15`); the runtime
+credentials therefore need GetObject as well as HeadObject/DeleteObject and
+presigning. Bytes never stream through the API beyond that 16-byte range.
+
+## Content-type validation gate
+
+The `content-type validation` migration gate (`contract.json`,
+`repository-catalog/registries/platforms.yaml`) is enforced at completion, not
+only at intent creation. A signed PUT binds the declared Content-Type header,
+but not what the bytes are, so a caller could otherwise store HTML or script
+bytes under `image/png` or `application/pdf`. Rules (first 16 bytes):
+
+| Declared type | Required leading bytes |
+|---|---|
+| `image/png` | `89 50 4E 47 0D 0A 1A 0A` |
+| `image/jpeg` | `FF D8 FF` |
+| `image/webp` | `RIFF` at 0..3 and `WEBP` at 8..11 |
+| `application/pdf` | `%PDF-` |
+| `text/plain` | no NUL byte |
+| `application/octet-stream` | unchecked (opaque by declaration) |
+
+Synthetic accept/reject cases are in `fixtures/gates/media-content-type.json`;
+`runtime_tests/test_api.py` runs every case through the real API and checks the
+fixture covers exactly the allow-list. Signature checks do not prove the whole
+file is well-formed and do not sanitise PDFs; downstream renderers must still
+treat stored files as untrusted.
 
 Ready objects remain until explicit DELETE; automatic ready-file expiry is not
 implemented. Pending intents stop completing after their upload expiry. Configure
@@ -150,3 +179,48 @@ grants return 503 without changing provider, migration or FORCE RLS gates.
 No DELETE/TRUNCATE grant is required by this readiness gate.
 Real PostgreSQL LOGIN-role regressions revoke and restore each required grant
 and verify that the minimal runtime grant set remains ready.
+
+## Verification 2026-10-29 (branch `media-runtime`)
+
+PR #1 (`codex/shared-infrastructure-20261015`) rebased onto `main` `d493a77`
+(shared CI v1.1.1: Ruff, `scripts/check.sh`, security scans incl. gitleaks;
+re-pinned schema). The one conflict, `.github/workflows/check.yml`, keeps
+`main`'s reusable-workflow version; the renderer-skip comment from the PR lives
+in `docs/ci-renderer-gates.md` and `shared-runtime.yml`.
+
+Changes beyond the rebase:
+
+- Ruff 0.17.1 (the CI pin) clean: `[tool.ruff.lint.flake8-bugbear]
+  extend-immutable-calls` for FastAPI markers and `require_scope`, sorted
+  imports, the checksum validator catches `ValueError` only, remaining blind
+  excepts carry a `noqa: BLE001` reason (errors are redacted to 503/exit 1).
+- Content-type gate above: `ObjectStore.read_prefix`, S3 ranged GetObject,
+  fixture `fixtures/gates/media-content-type.json` (13 synthetic cases).
+
+Environment: Python 3.12, PostgreSQL 16 (local `pgserver`; CI uses the
+`postgres:16` service), `platform-backend-core` at `d00e0119`, no network
+calls, no credentials. `PLATFORM_TEST_DSN` pointed at the disposable local
+server.
+
+RED (tests written first, before `read_prefix` or the signature table existed):
+`python -m pytest -q runtime_tests` -> 4 failed, 15 passed. The API case
+`png-declared-html-bytes` completed with 200 (`AssertionError:
+png-declared-html-bytes`), the fail-closed test got 200 instead of 503, the
+fixture test hit `ImportError: ALLOWED_CONTENT_TYPES`, and the S3 test hit
+`AttributeError: read_prefix`.
+
+GREEN after the change:
+
+- `python -m pytest -q runtime_tests`: 19 passed.
+- `BOOK_MEDIA_SKIP_RENDERER_TESTS=1 python -m pytest -q -rs`: 94 passed,
+  6 skipped (5 Edge renderer cases by flag, 1 Windows-only), 2 subtests.
+- `BOOK_MEDIA_SKIP_RENDERER_TESTS=1 bash scripts/check.sh`: 81 tests OK
+  (6 skipped), schema pin OK.
+- `ruff check .` (0.17.1): clean. `gitleaks git` 8.30.1 over full history: no
+  leaks.
+
+Not done here (deliberately): retention classes or automatic expiry (the
+`retention policy` gate needs an owner decision; ready objects stay until
+DELETE as documented above), `access-control parity` against a legacy
+implementation (none exists to compare with), real R2/S3 compatibility
+(staging gate), deploy.
