@@ -100,6 +100,8 @@ See [API, configuration and release runbook](docs/runtime.md) and
 Install a reviewed core wheel/revision first, then `pip install -e '.[test]'`.
 Run `python -m platform_media migrate` explicitly with `DATABASE_MIGRATION_DSN`,
 then `python -m platform_media serve` with `DATABASE_URL` and JWT configuration.
+`python -m platform_media sweep` is a separate operator command that removes
+orphaned objects for one explicit `MEDIA_WORKSPACE_ID` (see the runbook).
 Run `python -m pytest` with a disposable fixture-admin `PLATFORM_TEST_DSN`
 to exercise the complete original and new suite. Database tests explicitly skip
 when that DSN is absent. These skips do not establish durability or isolation.

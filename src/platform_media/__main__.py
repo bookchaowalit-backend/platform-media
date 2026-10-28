@@ -1,5 +1,6 @@
 import argparse
 import os
+from uuid import UUID
 
 from platform_backend_core import Database, MigrationRunner, TokenVerifier
 
@@ -10,8 +11,10 @@ def main():
     parser = argparse.ArgumentParser(
         description="Staged platform_media runtime; no automatic migrations"
     )
-    parser.add_argument("command", choices=["serve", "migrate"])
+    parser.add_argument("command", choices=["serve", "migrate", "sweep"])
     args = parser.parse_args()
+    if args.command == "sweep":
+        return sweep_command(parser)
     if args.command == "migrate":
         dsn = os.environ.get("DATABASE_MIGRATION_DSN")
         if not dsn:
@@ -51,6 +54,50 @@ def main():
         limit_concurrency=64,
         timeout_keep_alive=5,
     )
+
+
+def sweep_command(parser):
+    """One bounded orphan-object sweep of MEDIA_WORKSPACE_ID (docs/runtime.md).
+
+    Exit codes: 0 done (run again while more=yes), 1 database unavailable or
+    unexpected failure, 2 usage/configuration error, 3 done with store failures
+    (those rows stay for the next run)."""
+    from . import config
+    from .sweeper import DEFAULT_BATCH, MAX_BATCH, sweep
+
+    dsn = os.environ.get("DATABASE_URL")
+    raw_workspace = os.environ.get("MEDIA_WORKSPACE_ID")
+    if not dsn or not raw_workspace:
+        parser.error("DATABASE_URL and MEDIA_WORKSPACE_ID required")
+    try:
+        workspace = UUID(raw_workspace)
+    except ValueError:
+        parser.error("MEDIA_WORKSPACE_ID must be a UUID")
+    raw_batch = os.environ.get("MEDIA_SWEEP_BATCH", str(DEFAULT_BATCH))
+    if not raw_batch.isdecimal() or not 1 <= int(raw_batch) <= MAX_BATCH:
+        parser.error(f"MEDIA_SWEEP_BATCH must be 1..{MAX_BATCH}")
+    try:
+        store = config.configured_store()
+    except Exception:  # noqa: BLE001 - configuration values are not echoed
+        parser.error("invalid MEDIA_S3_* object-store configuration")
+    if store is None:
+        parser.error(
+            "MEDIA_S3_ENDPOINT, MEDIA_S3_BUCKET, MEDIA_S3_ACCESS_KEY and MEDIA_S3_SECRET_KEY required"
+        )
+    try:
+        database = Database(dsn, max_size=1)
+        try:
+            result = sweep(database, store, workspace, batch_size=int(raw_batch))
+        finally:
+            database.close()
+    except Exception:  # noqa: BLE001 - reported without the DSN, keys or provider detail
+        parser.exit(1, "sweep failed; inspect database access\n")
+    print(
+        f"swept={result.swept} failed={result.failed} skipped={result.skipped}"
+        f" more={'yes' if result.more else 'no'}"
+    )
+    if result.failed:
+        parser.exit(3, "some object deletions failed; rows are left for the next run\n")
 
 
 if __name__ == "__main__":

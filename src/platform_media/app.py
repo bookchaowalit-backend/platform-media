@@ -16,7 +16,8 @@ from .adapters import ObjectStore
 
 LOG = logging.getLogger("platform_media")
 
-# Effective privileges used by runtime SQL; append-only effects need INSERT only.
+# Effective privileges used by runtime SQL (API and `sweep`, which needs only
+# SELECT/UPDATE: sweeper.SWEEP_PERMISSIONS); append-only effects need INSERT only.
 READINESS_PERMISSIONS = {
     "media_files": ("SELECT", "INSERT", "UPDATE"),
 }

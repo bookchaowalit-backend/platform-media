@@ -22,5 +22,15 @@ CREATE POLICY media_workspace ON media_files
  USING (workspace_id = nullif(current_setting('app.workspace_id', true),'')::uuid)
  WITH CHECK (workspace_id = nullif(current_setting('app.workspace_id', true),'')::uuid);
 """,
-    )
+    ),
+    # Orphan-object sweeper (`python -m platform_media sweep`): marks a row whose
+    # object key was deleted after its upload link expired, so it is not retried.
+    Migration(
+        "002-media-sweep",
+        """
+ALTER TABLE media_files ADD COLUMN swept_at timestamptz;
+CREATE INDEX media_sweep_candidates ON media_files(workspace_id, expires_at, id)
+ WHERE swept_at IS NULL AND status <> 'ready';
+""",
+    ),
 ]

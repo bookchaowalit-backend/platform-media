@@ -19,6 +19,9 @@ that owns the schema. Grant the runtime role only schema USAGE, SELECT on
 Runtime roles must be NOSUPERUSER NOBYPASSRLS; the database wrapper rejects
 privileged roles. Tenant tables ENABLE and FORCE RLS even for their owner.
 
+`python -m platform_media sweep` is a third, explicit operator command for one
+`MEDIA_WORKSPACE_ID`; see "Orphan-object sweeper".
+
 `python -m platform_media serve` listens on `PORT` (default 8080), exposes
 `/healthz`, `/readyz`, `/metrics` and `/docs`. Required configuration:
 
@@ -162,12 +165,105 @@ file is well-formed and do not sanitise PDFs; downstream renderers must still
 treat stored files as untrusted.
 
 Ready objects remain until explicit DELETE; automatic ready-file expiry is not
-implemented. Pending intents stop completing after their upload expiry. Configure
-a bucket lifecycle/approved sweeper for abandoned object cleanup and monitor
+implemented. Pending intents stop completing after their upload expiry. Run
+`python -m platform_media sweep` (see "Orphan-object sweeper") for abandoned
+object cleanup, add the bucket lifecycle rule described there, and monitor
 pending/deleting backlog. Do not apply unconditional object-age expiry to ready
 objects. Already issued URLs cannot be revoked individually; PUT URLs can remain
 valid after deletion and recreate unreferenced bytes until expiry, requiring
 orphan cleanup. The API continues hiding the tombstone.
+
+## Orphan-object sweeper
+
+`python -m platform_media sweep` is an explicit operator command, like `migrate`.
+Startup and `serve` never sweep. One run handles one bounded batch for exactly one
+workspace and exits:
+
+| Name | Purpose |
+|---|---|
+| `DATABASE_URL` | Runtime role DSN (the API role; no extra grant) |
+| `MEDIA_WORKSPACE_ID` | Required UUID; the only workspace the run reads (RLS `app.workspace_id`) |
+| `MEDIA_S3_ENDPOINT`, `MEDIA_S3_BUCKET`, `MEDIA_S3_ACCESS_KEY`, `MEDIA_S3_SECRET_KEY`, `MEDIA_S3_REGION` | Same object-store configuration as `serve`; all four required |
+| `MEDIA_SWEEP_BATCH` | Rows per run, default 100, 1..1000 |
+
+There is no cross-tenant scan and no caller-selected workspace: an external
+trusted scheduler runs one invocation per workspace it is configured for (the same
+model as `COMMUNICATION_WORKSPACE_ID` in `platform-communication`).
+
+A row is a candidate when `swept_at IS NULL`, its status is `deleted`, `deleting`
+or `pending` (an intent that never completed), and `expires_at` is at least
+`SWEEP_GRACE_SECONDS` (900 s) in the past. The grace covers clock skew between the
+API host that signed the PUT and the provider that checks its expiry. After that
+point no presigned PUT for the key is valid, so the deletion is final. `ready`
+rows are never candidates, whatever their (intent) `expires_at`.
+
+For each candidate, oldest expiry first, the sweeper:
+
+1. deletes the object at the row's key with no transaction open. A missing object
+   counts as deleted; the S3 adapter also treats a `404`/`NoSuchKey` reply as
+   success;
+2. sets `swept_at=now()` only if the row still has the same status, key and expiry.
+   A `deleting` row (a DELETE whose store call failed) also becomes `deleted` with
+   `deleted_at`, finishing that deletion. `pending` rows keep their status, and
+   `complete` still answers 410.
+
+A store error leaves the row unmarked for the next run. A row changed by a
+concurrent DELETE during step 1 is counted `skipped` and re-checked next run.
+Concurrent sweeps of the same workspace are safe: deletes are idempotent and the
+mark is conditional. Logs and output carry counts only, never keys, workspace ids,
+the DSN or provider messages. Output is one line, `swept=N failed=N skipped=N
+more=yes|no`. `more=yes` means the batch was full, so run again.
+
+| Exit | Meaning |
+|---|---|
+| 0 | Batch done with no store failures |
+| 1 | Database unavailable or unexpected failure (no detail printed) |
+| 2 | Usage/configuration error: missing/invalid `DATABASE_URL`, `MEDIA_WORKSPACE_ID`, `MEDIA_SWEEP_BATCH` or `MEDIA_S3_*` |
+| 3 | Batch done, but some object deletions failed; those rows are retried next run |
+
+Migration `002-media-sweep` adds the nullable `media_files.swept_at` and a partial
+index on `(workspace_id, expires_at, id) WHERE swept_at IS NULL AND status <>
+'ready'`. Readiness keeps comparing the full migration history, so a runtime
+without `002` reports 503. The sweeper uses only SELECT and UPDATE on
+`media_files` (`sweeper.SWEEP_PERMISSIONS`, a subset of the readiness grant set),
+so no DELETE/TRUNCATE grant is added. The store credentials need DeleteObject,
+which the API already uses.
+
+Library use: `platform_media.sweeper.sweep(database, store, workspace,
+batch_size=100) -> SweepResult(swept, failed, skipped, more)`.
+
+### Bucket lifecycle rule (deploy-time step, not applied here)
+
+The bucket owner configures this once per bucket during deployment, through the
+provider console or its lifecycle API. Nothing in this repository calls a cloud API.
+
+- **Abort incomplete multipart uploads after 1 day, bucket-wide.** The API only
+  issues single presigned PUTs, so any multipart upload is a stray. Removing its
+  parts never touches a stored object.
+- **Do not expire objects under the API's `<workspace>/` keys.** Ready files share
+  that layout, and the docs above forbid unconditional age expiry of ready
+  objects. API orphans are removed by `sweep`, which can tell them apart.
+- **Expire only a dedicated non-API prefix**, if one is used (for example
+  `scratch/` for manual operations or staging smoke objects), say after 7 days.
+
+S3 `PutBucketLifecycleConfiguration` body (R2 accepts the same rule shape through
+its S3 API, or set the equivalent in the dashboard):
+
+```json
+{
+  "Rules": [
+    {"ID": "abort-incomplete-multipart", "Status": "Enabled",
+     "Filter": {"Prefix": ""},
+     "AbortIncompleteMultipartUpload": {"DaysAfterInitiation": 1}},
+    {"ID": "expire-scratch", "Status": "Enabled",
+     "Filter": {"Prefix": "scratch/"},
+     "Expiration": {"Days": 7}}
+  ]
+}
+```
+
+Schedule `sweep` per workspace at an interval at least as long as the grace period
+(for example hourly). Alert on exit 1 or 3, and on `more=yes` persisting across runs.
 
 ## Staged deployment and rollback
 
@@ -208,7 +304,8 @@ Readiness checks schema USAGE and migration-history SELECT, then checks every
 required business-table privilege individually before reporting ready. Missing
 grants return 503 without changing provider, migration or FORCE RLS gates.
 
-- `media_files`: SELECT, INSERT, UPDATE.
+- `media_files`: SELECT, INSERT, UPDATE. The `sweep` command uses SELECT and
+  UPDATE only (`sweeper.SWEEP_PERMISSIONS`); no grant was added for it.
 
 No DELETE/TRUNCATE grant is required by this readiness gate.
 Real PostgreSQL LOGIN-role regressions revoke and restore each required grant
@@ -285,9 +382,9 @@ by that window and uses the existing tombstone row, with no migration:
   as best effort (a failure is logged and the next DELETE replay retries),
   then returns 404. It never resurrects the row.
 - Residual: a late PUT that arrives after the final DELETE/complete call and
-  before `expires_at` stays unreferenced. A bucket lifecycle rule or approved
-  sweeper must still remove objects under `<workspace>/<id>` whose row is
-  `deleted` (see "Content-type validation gate" above). Overwriting bytes
+  before `expires_at` stays unreferenced until `python -m platform_media sweep`
+  removes it after the link expires (see "Orphan-object sweeper", added later
+  the same day). Overwriting bytes
   after completion still depends on the provider enforcing `If-None-Match: *`.
   That is a staging compatibility gate.
 
@@ -350,3 +447,48 @@ check (no `wheelhouse/` here) and the existing non-root `USER` passed.
 GREEN: `BOOK_MEDIA_SKIP_RENDERER_TESTS=1 bash scripts/check.sh` and `ruff check .`
 pass; the image build is verified only by the CI `image` job (no local Docker).
 Nothing was pushed to a registry or deployed.
+
+## Orphan-object sweeper 2026-10-29 (branch `media-sweeper`)
+
+Closes the residual from "Follow-ups 2026-10-29" (F1b): "an upload that lands
+after the last DELETE or complete call, but before the link expires, is still
+left behind". Design and operation are under "Orphan-object sweeper" above:
+`python -m platform_media sweep`, one explicit `MEDIA_WORKSPACE_ID` per run,
+batch 1..1000 (default 100), 900 s grace after `expires_at`, migration
+`002-media-sweep` (`swept_at` plus a partial index), idempotent S3 delete
+(`404`/`NoSuchKey` count as success), counts-only output, exit codes 0/1/2/3, and
+a documented bucket lifecycle rule that is not applied from here.
+
+RED (`runtime_tests/test_sweeper.py` written first against `main` `0f87511`):
+`python -m pytest -q runtime_tests` gave 10 failed, 25 passed:
+
+- seven tests hit `ModuleNotFoundError: No module named 'platform_media.sweeper'`;
+- the CLI test got `invalid choice: 'sweep' (choose from serve, migrate)`;
+- the readiness test still got 200 (not 503) after removing the `002-media-sweep`
+  history row, because no such migration existed;
+- the S3 adapter test raised `botocore.errorfactory.NoSuchKey` from `delete`.
+
+One test helper indexed tuple rows by name. It was fixed during GREEN; the
+assertions did not change.
+
+GREEN (Python 3.12, local `pgserver` PostgreSQL 16, core `d00e0119`, in-memory
+store and botocore Stubber only, no network or credentials):
+
+- `python -m pytest -q runtime_tests`: 35 passed (10 new).
+- `BOOK_MEDIA_SKIP_RENDERER_TESTS=1 python -m pytest -q -rs`: 118 passed,
+  6 skipped (renderer flag / Windows-only), 2 subtests.
+- `BOOK_MEDIA_SKIP_RENDERER_TESTS=1 bash scripts/check.sh`: 89 tests OK
+  (6 skipped), including `tests/test_build_hygiene.py`.
+- `ruff check .` (0.17.1 and 0.17.3): clean.
+
+The new tests cover: only deleted, expired-pending and stuck-deleting rows past the
+grace are swept, and ready, open-link or in-grace rows are not; swept rows are
+not retried; a missing object counts as swept; a store error leaves the row for the
+next run, with logs free of keys, ids and provider text; batch bounds and
+`more`; other-workspace rows stay untouched; no row lock is held during the store
+call, and a row changed concurrently is skipped then swept next run; CLI exit codes
+0/1/2/3 with counts-only output; the sweep runs under the least SELECT/INSERT/UPDATE
+grant set; readiness needs `002`; the S3 delete is idempotent.
+
+Not done: scheduling (owner/platform decision), real R2/S3 lifecycle configuration
+(deploy-time owner step), deploy.
