@@ -1,6 +1,7 @@
 import base64
 import hashlib
 import json
+import logging
 from contextlib import contextmanager
 from uuid import UUID, uuid4
 
@@ -12,6 +13,8 @@ from psycopg.rows import dict_row
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from .adapters import ObjectStore
+
+LOG = logging.getLogger("platform_media")
 
 # Effective privileges used by runtime SQL; append-only effects need INSERT only.
 READINESS_PERMISSIONS = {
@@ -246,44 +249,93 @@ def create_app(database, verifier, object_store: ObjectStore | None = None):
                     raise HTTPException(503, "object store unavailable") from None
             return value
 
+    def purge_late_object(store, key):
+        # A presigned PUT cannot be revoked and stays valid until the intent's
+        # expires_at (at most 3600 s), so it can recreate bytes after DELETE.
+        # Callers only invoke this while that window is open; best effort here,
+        # a replayed DELETE retries and reports 503 on failure.
+        try:
+            store.delete(key)
+        except Exception:  # noqa: BLE001 - best effort; a replayed DELETE retries
+            LOG.warning("late-object purge failed; DELETE replay will retry")
+
     @app.post("/v1/uploads/{identifier}/complete")
     def complete(
         identifier: UUID,
         principal=Depends(require_scope("files:write")),
         store=Depends(configured),
     ):
+        # Phase 1: read the intent and release the transaction before any network
+        # call, so a slow store cannot hold a row lock or idle in transaction.
         with transaction(database, principal.workspace) as conn:
-            row = fetch(conn, identifier, True)
-            if row["status"] == "ready":
-                return public(row)
-            if row["status"] != "pending":
-                raise HTTPException(409, "file is being deleted")
-            if conn.execute(
-                "SELECT now() >= %s AS expired", (row["expires_at"],)
-            ).fetchone()["expired"]:
-                raise HTTPException(410, "upload intent expired")
-            try:
-                actual = store.head(row["object_key"])
-            except Exception:  # noqa: BLE001 - provider errors are redacted to 503
-                raise HTTPException(503, "object store unavailable") from None
-            expected = {
-                "size": row["size"],
-                "content_type": row["content_type"],
-                "checksum_sha256": row["checksum_sha256"],
-            }
-            if actual is None or any(actual.get(k) != v for k, v in expected.items()):
-                raise HTTPException(409, "stored object metadata mismatch")
-            try:
-                prefix = store.read_prefix(row["object_key"], SIGNATURE_BYTES)
-            except Exception:  # noqa: BLE001 - provider errors are redacted to 503
-                raise HTTPException(503, "object store unavailable") from None
-            if prefix is None or not ALLOWED_CONTENT_TYPES[row["content_type"]](prefix):
-                raise HTTPException(409, "stored object content does not match content type")
             row = conn.execute(
-                "UPDATE media_files SET status='ready',completed_at=now() WHERE id=%s RETURNING *",
+                "SELECT *, now() >= expires_at AS expired FROM media_files WHERE id=%s",
                 (identifier,),
             ).fetchone()
+        if row is None:
+            raise HTTPException(404, "file not found")
+        if row["status"] == "deleted":
+            if not row["expired"]:
+                purge_late_object(store, row["object_key"])
+            raise HTTPException(404, "file not found")
+        if row["status"] == "ready":
             return public(row)
+        if row["status"] != "pending":
+            raise HTTPException(409, "file is being deleted")
+        if row["expired"]:
+            raise HTTPException(410, "upload intent expired")
+        # Phase 2: verify the stored object without a transaction.
+        try:
+            actual = store.head(row["object_key"])
+        except Exception:  # noqa: BLE001 - provider errors are redacted to 503
+            raise HTTPException(503, "object store unavailable") from None
+        expected = {
+            "size": row["size"],
+            "content_type": row["content_type"],
+            "checksum_sha256": row["checksum_sha256"],
+        }
+        if (
+            actual is None
+            or not actual.get("etag")
+            or any(actual.get(k) != v for k, v in expected.items())
+        ):
+            raise HTTPException(409, "stored object metadata mismatch")
+        try:
+            # Bound the content read to the version just verified by HEAD.
+            prefix = store.read_prefix(
+                row["object_key"], SIGNATURE_BYTES, if_match=actual["etag"]
+            )
+        except Exception:  # noqa: BLE001 - provider errors are redacted to 503
+            raise HTTPException(503, "object store unavailable") from None
+        if prefix is None or not ALLOWED_CONTENT_TYPES[row["content_type"]](prefix):
+            raise HTTPException(409, "stored object content does not match content type")
+        # Phase 3: re-lock and finalize only if the intent is unchanged and pending.
+        bound = ("object_key", "size", "content_type", "checksum_sha256", "expires_at")
+        with transaction(database, principal.workspace) as conn:
+            current = conn.execute(
+                "SELECT *, now() >= expires_at AS expired FROM media_files WHERE id=%s FOR UPDATE",
+                (identifier,),
+            ).fetchone()
+            if current is None:
+                raise HTTPException(404, "file not found")
+            if current["status"] == "ready":
+                return public(current)
+            if current["status"] == "pending" and all(
+                current[k] == row[k] for k in bound
+            ):
+                if current["expired"]:
+                    raise HTTPException(410, "upload intent expired")
+                return public(
+                    conn.execute(
+                        "UPDATE media_files SET status='ready',completed_at=now() WHERE id=%s AND status='pending' RETURNING *",
+                        (identifier,),
+                    ).fetchone()
+                )
+        if current["status"] == "deleted":
+            if not current["expired"]:
+                purge_late_object(store, current["object_key"])
+            raise HTTPException(404, "file not found")
+        raise HTTPException(409, "file is being deleted")
 
     @app.get("/v1/files")
     def files(
@@ -329,19 +381,27 @@ def create_app(database, verifier, object_store: ObjectStore | None = None):
     ):
         with transaction(database, principal.workspace) as conn:
             row = conn.execute(
-                "SELECT * FROM media_files WHERE id=%s FOR UPDATE", (identifier,)
+                "SELECT *, now() < expires_at AS upload_window_open FROM media_files WHERE id=%s FOR UPDATE",
+                (identifier,),
             ).fetchone()
             if row is None:
                 raise HTTPException(404, "file not found")
-            if row["status"] == "deleted":
+            already_deleted = row["status"] == "deleted"
+            if already_deleted and not row["upload_window_open"]:
+                # No presigned PUT for this intent can still be valid: nothing to purge.
                 return Response(status_code=204)
-            conn.execute(
-                "UPDATE media_files SET status='deleting' WHERE id=%s", (identifier,)
-            )
+            if not already_deleted:
+                conn.execute(
+                    "UPDATE media_files SET status='deleting' WHERE id=%s", (identifier,)
+                )
         try:
+            # On a replay inside the upload window this removes bytes a late
+            # presigned PUT recreated after the first deletion.
             store.delete(row["object_key"])
         except Exception:  # noqa: BLE001 - provider errors are redacted to 503
             raise HTTPException(503, "object deletion pending; retry safely") from None
+        if already_deleted:
+            return Response(status_code=204)
         with transaction(database, principal.workspace) as conn:
             conn.execute(
                 "UPDATE media_files SET status='deleted',deleted_at=now() WHERE id=%s",

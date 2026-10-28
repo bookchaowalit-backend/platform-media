@@ -224,3 +224,71 @@ Not done here (deliberately): retention classes or automatic expiry (the
 DELETE as documented above), `access-control parity` against a legacy
 implementation (none exists to compare with), real R2/S3 compatibility
 (staging gate), deploy.
+
+## Follow-ups 2026-10-29 (branch `media-followups`)
+
+Two low-severity review findings on `main` at `77029d5`.
+
+**F1a: content read bound to the verified object version.** Completion did
+HEAD, then a separate ranged GetObject, with nothing tying the two together.
+On a store that does not enforce `If-None-Match: *`, the object could be
+replaced between the calls, so the metadata check and the signature check
+could see different objects. Now `head` returns the ETag, and `read_prefix(key,
+16, if_match=etag)` sends GetObject `IfMatch`. A different version gives 412
+`PreconditionFailed`, which the adapter maps to `None`, so completion returns
+409 and the intent stays `pending`. A HEAD with no ETag also fails closed (409).
+No new permission is needed (still GetObject).
+
+**F1b: late PUT after delete (orphan bytes).** A presigned PUT cannot be
+revoked. It stays valid until the intent's `expires_at` (at most 3600 s after
+the intent), so after DELETE it can recreate the object. This is now bounded
+by that window and uses the existing tombstone row, with no migration:
+
+- `DELETE` on an already `deleted` row deletes the object key again while
+  `now() < expires_at` (503 on provider error, safe to retry). After the
+  window it returns 204 without calling the store.
+- `complete` on a `deleted` intent inside the window deletes the object key
+  as best effort (a failure is logged and the next DELETE replay retries),
+  then returns 404. It never resurrects the row.
+- Residual: a late PUT that arrives after the final DELETE/complete call and
+  before `expires_at` stays unreferenced. A bucket lifecycle rule or approved
+  sweeper must still remove objects under `<workspace>/<id>` whose row is
+  `deleted` (see "Content-type validation gate" above). Overwriting bytes
+  after completion still depends on the provider enforcing `If-None-Match: *`.
+  That is a staging compatibility gate.
+
+**F2: no transaction across store calls.** `complete` held `SELECT ... FOR
+UPDATE` across HEAD and GetObject. A slow store could pass the 10 s
+`idle_in_transaction_session_timeout` and return 500 instead of 503, and it
+blocked DELETE in the meantime. It now runs in three phases: (1) read the
+intent and commit, (2) HEAD plus the If-Match range read with no transaction
+open, (3) re-lock and set `ready` only if the row is still `pending` with the
+same object key, size, type, checksum and expiry. If a concurrent DELETE won,
+the result is 404 (plus a purge inside the window). If the row is `deleting`,
+the result is 409. If another completion already finished, its row is
+returned. If the intent expired, the result is 410.
+
+RED (tests written first against `77029d5` source): `python -m pytest -q
+runtime_tests` -> 7 failed, 18 passed:
+
+- the S3 head test was missing the `etag` key, and the S3 If-Match test hit
+  `TypeError: read_prefix() got an unexpected keyword argument 'if_match'`;
+- the swapped-object test and the no-ETag test both got 200 instead of 409;
+- the no-lock probe recorded `['LockNotAvailable']` (`FOR UPDATE NOWAIT` from
+  a second connection while `complete` was inside HEAD);
+- the concurrent-delete test recorded `['LockNotAvailable']` under a 2 s
+  `lock_timeout`;
+- the late-PUT test found the recreated object still in the store after
+  complete/DELETE replay.
+
+GREEN after the change (Python 3.12, local `pgserver` PostgreSQL 16, core
+`d00e0119`, Stubber only, no network or credentials):
+
+- `python -m pytest -q runtime_tests`: 25 passed.
+- `BOOK_MEDIA_SKIP_RENDERER_TESTS=1 python -m pytest -q -rs`: 100 passed,
+  6 skipped (renderer flag / Windows-only), 2 subtests.
+- `BOOK_MEDIA_SKIP_RENDERER_TESTS=1 bash scripts/check.sh`: 81 tests OK
+  (6 skipped).
+- `ruff check .` (0.17.1 and 0.17.3): clean. Test fixtures use only synthetic
+  keys (`synthetic-access`, `"synthetic-etag-1"`). gitleaks runs in the CI
+  `security` job; it is not installed locally.
