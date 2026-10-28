@@ -127,4 +127,12 @@ class S3ObjectStore:
         )
 
     def delete(self, key):
-        self.client.delete_object(Bucket=self.bucket, Key=key)
+        # Idempotent: an already missing object counts as deleted. S3 itself returns
+        # 204 for a missing key; some compatible stores answer 404 NoSuchKey instead.
+        from botocore.exceptions import ClientError
+
+        try:
+            self.client.delete_object(Bucket=self.bucket, Key=key)
+        except ClientError as exc:
+            if exc.response["Error"]["Code"] not in ("404", "NoSuchKey", "NotFound"):
+                raise
