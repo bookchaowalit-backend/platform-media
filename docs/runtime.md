@@ -44,6 +44,40 @@ Adapters implement `ObjectStore` in `platform_media.adapters`
 adapter loads only the explicit environment configuration above. No hub path
 or other service's data model is imported.
 
+### Container image
+
+`docker build .` works from a clean checkout with no build arguments and no
+pre-staged `wheelhouse/`. The `Dockerfile` is two stages:
+
+1. `build` (`python:3.12-slim` plus `git`): `pip wheel` builds this distribution
+   (`platform_media` and `book_media_platform`) and `platform-backend-core` from the
+   same reviewed commit CI installs (`d00e0119c2e47da3942d9c7b4b88828953f8bc5a`),
+   with all transitive dependencies (`boto3`, `uvicorn`, ...).
+2. `runtime` (`python:3.12-slim`, no git, no build tools): installs only those
+   wheels with `--no-index`, runs as UID/GID `65532`, `PORT=8080`, and keeps
+   `CMD ["python", "-m", "platform_media", "serve"]`. Run `migrate` as a separate
+   one-off with `DATABASE_MIGRATION_DSN` (same image, command override).
+
+The image serves the media API only. The optional `book_media_platform.graphics`
+renderer needs Microsoft Edge and Arial (`find_edge()`, Windows process cleanup via
+PowerShell); neither is installed, so rendering does not work in this image. The
+graphics package still imports and its CLI `--help` runs. Renderer acceptance stays
+with the manual Windows `graphics-renderer.yml` workflow (`docs/ci-renderer-gates.md`).
+
+`.dockerignore` keeps `.git`, `.venv`, tests, build output, `.runtime`, `data`,
+`logs` and `.env*` out of the build context. CI job `image` in `shared-runtime.yml`
+runs `docker build` on every push and pull request, then checks that the image
+imports `boto3`, the core, `platform_media.app`/`adapters` and
+`book_media_platform.graphics`, that `python -m platform_media --help` runs, and
+that it runs as a non-root user. It never pushes or deploys.
+`tests/test_build_hygiene.py` (part of `scripts/check.sh`) fails if the Dockerfile
+copies a git-ignored path, stops being multi-stage, pins a core commit other than
+the workflow's, runs the final stage as root or changes the CMD, if CI stops
+building the image, or if any workflow `uses:` is not pinned to a 40-hex commit SHA
+(tags go in a trailing comment). Upgrading the core means changing the commit in
+the workflow, the Dockerfile and `[tool.uv.sources]` together; the tests fail on
+any mismatch.
+
 ## Versioned API
 
 All tenant authority comes from a verified JWT `ws` UUID. Body/header workspace
@@ -137,8 +171,8 @@ orphan cleanup. The API continues hiding the tombstone.
 
 ## Staged deployment and rollback
 
-Build `Dockerfile` with `CORE_REQUIREMENT` set to a reviewed immutable core
-artifact; the image deliberately has no unpinned core default. Run non-root,
+Build the image with `docker build .` (see "Container image"; the core commit is
+pinned in the `Dockerfile`, there is no unpinned core default). Run non-root,
 with one bounded process per container, concurrency 64, pool max 8 by default,
 request timeout 30s, provider connect/read 3s/5s and one retry. Supply private
 DB network access and outbound HTTPS only to the configured object endpoint/JWKS.
@@ -292,3 +326,27 @@ GREEN after the change (Python 3.12, local `pgserver` PostgreSQL 16, core
 - `ruff check .` (0.17.1 and 0.17.3): clean. Test fixtures use only synthetic
   keys (`synthetic-access`, `"synthetic-etag-1"`). gitleaks runs in the CI
   `security` job; it is not installed locally.
+
+## Build hygiene 2026-10-29 (branch `build-hygiene`)
+
+Ported from `platform-developer` `8047108`. Two low-severity findings on `main` `916df6e`:
+
+1. `shared-runtime.yml` and `graphics-renderer.yml` used `actions/checkout@v4` and
+   `actions/setup-python@v5` by tag. Both are pinned to commit SHAs (`11d5960a...` =
+   v4, `a26af69b...` = v5, lightweight tags resolved with `gh api .../git/ref/tags/...`),
+   tag in a comment. `check.yml` already called the SHA-pinned reusable workflows.
+2. The single-stage `Dockerfile` needed a `CORE_REQUIREMENT` build argument (no
+   default), so `docker build .` from a clone failed, and CI never built it. It is now
+   the multi-stage build under "Container image", UID `10001` became `65532:65532`
+   like the other platform services, and CI builds it.
+
+RED (`tests/test_build_hygiene.py` written first, run on the old files):
+`python3 -m unittest tests.test_build_hygiene` 5 of 8 failed (unpinned actions in
+`shared-runtime.yml` and `graphics-renderer.yml`; one `FROM`; no core commit in the
+Dockerfile; no `docker build` step; no image import check for `boto3` and
+`platform_media.app`). The checker self-test, the clean-checkout COPY
+check (no `wheelhouse/` here) and the existing non-root `USER` passed.
+
+GREEN: `BOOK_MEDIA_SKIP_RENDERER_TESTS=1 bash scripts/check.sh` and `ruff check .`
+pass; the image build is verified only by the CI `image` job (no local Docker).
+Nothing was pushed to a registry or deployed.

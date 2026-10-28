@@ -1,11 +1,25 @@
-FROM python:3.12-slim
-WORKDIR /app
-ARG CORE_REQUIREMENT
+# Builds from a clean checkout: no build args, no pre-staged wheelhouse, nothing published to PyPI.
+# platform-backend-core is installed from the same reviewed commit CI tests against
+# (.github/workflows/shared-runtime.yml); tests/test_build_hygiene.py keeps them equal.
+# The image serves the media API only; the optional Edge graphics renderer is not installed
+# (see docs/runtime.md, "Container image").
+FROM python:3.12-slim AS build
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /src
 COPY pyproject.toml README.md LICENSE ./
-COPY src ./src
-COPY book_media_platform ./book_media_platform
-RUN test -n "$CORE_REQUIREMENT" && pip install --no-cache-dir "$CORE_REQUIREMENT" && pip install --no-cache-dir .
-RUN useradd --uid 10001 --create-home service
-USER 10001
+COPY src/ src/
+COPY book_media_platform/ book_media_platform/
+RUN pip wheel --no-cache-dir --wheel-dir /wheels \
+    'platform-backend-core @ git+https://github.com/bookchaowalit-backend/platform-backend-core.git@d00e0119c2e47da3942d9c7b4b88828953f8bc5a' \
+    .
+
+FROM python:3.12-slim AS runtime
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PORT=8080
+COPY --from=build /wheels /wheels
+RUN pip install --no-cache-dir --no-index --find-links=/wheels platform-media==0.1.0 \
+    && rm -rf /wheels
+USER 65532:65532
 EXPOSE 8080
 CMD ["python", "-m", "platform_media", "serve"]
