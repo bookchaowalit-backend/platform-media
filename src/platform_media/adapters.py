@@ -1,5 +1,8 @@
 """Object bytes never pass through the API, except a bounded leading range read for the
-content-type check at completion. Adapters must bound network waits."""
+content-type check at completion. Adapters must bound network waits.
+
+``head`` returns the object's ETag; ``read_prefix(..., if_match=etag)`` must read that
+same version or return None, so a swap between the two calls fails closed."""
 
 from typing import Protocol
 from urllib.parse import urlsplit
@@ -10,7 +13,9 @@ class ObjectStore(Protocol):
         self, key: str, content_type: str, size: int, checksum: str, expires: int
     ) -> dict: ...
     def head(self, key: str) -> dict | None: ...
-    def read_prefix(self, key: str, length: int) -> bytes | None: ...
+    def read_prefix(
+        self, key: str, length: int, if_match: str | None = None
+    ) -> bytes | None: ...
     def presign_get(self, key: str, expires: int) -> str: ...
     def delete(self, key: str) -> None: ...
 
@@ -88,17 +93,26 @@ class S3ObjectStore:
             "size": result["ContentLength"],
             "content_type": result.get("ContentType"),
             "checksum_sha256": result.get("ChecksumSHA256"),
+            "etag": result.get("ETag"),
         }
 
-    def read_prefix(self, key, length):
+    def read_prefix(self, key, length, if_match=None):
         from botocore.exceptions import ClientError
 
+        params = {"Bucket": self.bucket, "Key": key, "Range": f"bytes=0-{length - 1}"}
+        if if_match is not None:
+            # GetObject If-Match: a different object version yields 412, not its bytes.
+            params["IfMatch"] = if_match
         try:
-            result = self.client.get_object(
-                Bucket=self.bucket, Key=key, Range=f"bytes=0-{length - 1}"
-            )
+            result = self.client.get_object(**params)
         except ClientError as exc:
-            if exc.response["Error"]["Code"] in ("404", "NoSuchKey", "NotFound"):
+            if exc.response["Error"]["Code"] in (
+                "404",
+                "NoSuchKey",
+                "NotFound",
+                "412",
+                "PreconditionFailed",
+            ):
                 return None
             raise
         body = result["Body"]

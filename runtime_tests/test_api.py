@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -47,10 +48,16 @@ OWN = {"Authorization": "Bearer own", "Idempotency-Key": "fixture-key"}
 OTHER = {"Authorization": "Bearer other", "Idempotency-Key": "fixture-key"}
 
 
+def _etag(found):
+    # Synthetic ETag: changes whenever any stored attribute (bytes or metadata) changes.
+    return '"' + hashlib.sha256(repr(sorted(found.items())).encode()).hexdigest()[:32] + '"'
+
+
 class FakeStore:
     def __init__(self):
         self.objects = {}
         self.deleted = []
+        self.after_head = None  # test hook: runs between head and read_prefix
 
     def presign_put(self, key, content_type, size, checksum, expires):
         return {
@@ -63,11 +70,19 @@ class FakeStore:
 
     def head(self, key):
         found = self.objects.get(key)
-        return None if found is None else {k: v for k, v in found.items() if k != "prefix"}
+        result = None
+        if found is not None:
+            result = {k: v for k, v in found.items() if k not in ("prefix", "generation")}
+            result["etag"] = _etag(found)
+        if self.after_head is not None:
+            self.after_head(key)
+        return result
 
-    def read_prefix(self, key, length):
+    def read_prefix(self, key, length, if_match=None):
         found = self.objects.get(key)
-        return None if found is None else found.get("prefix", b"")[:length]
+        if found is None or (if_match is not None and _etag(found) != if_match):
+            return None  # S3 GetObject If-Match mismatch: 412 PreconditionFailed
+        return found.get("prefix", b"")[:length]
 
     def presign_get(self, key, expires):
         return "http://127.0.0.1/download/" + key
@@ -238,6 +253,7 @@ def test_actual_s3_adapter_binds_conditional_put_length_type_checksum_and_expiry
                 "ContentLength": 42,
                 "ContentType": "image/png",
                 "ChecksumSHA256": BODY["checksum_sha256"],
+                "ETag": '"synthetic-etag-1"',
             },
             {"Bucket": "synthetic", "Key": key, "ChecksumMode": "ENABLED"},
         )
@@ -245,6 +261,7 @@ def test_actual_s3_adapter_binds_conditional_put_length_type_checksum_and_expiry
             "size": 42,
             "content_type": "image/png",
             "checksum_sha256": BODY["checksum_sha256"],
+            "etag": '"synthetic-etag-1"',
         }
         stub.add_client_error(
             "head_object",
@@ -409,12 +426,12 @@ def test_content_check_fails_closed_on_missing_or_unreadable_bytes(runtime):
     file_id, _key = _stage(c, store, "image/png", "gate-unreadable", PNG_PREFIX)
     original = store.read_prefix
 
-    def unavailable(key, length):
+    def unavailable(key, length, **_kwargs):
         raise OSError("provider down")
 
     store.read_prefix = unavailable
     assert c.post(f"/v1/uploads/{file_id}/complete", headers=OWN).status_code == 503
-    store.read_prefix = lambda key, length: None
+    store.read_prefix = lambda key, length, **_kwargs: None
     assert c.post(f"/v1/uploads/{file_id}/complete", headers=OWN).status_code == 409
     store.read_prefix = original
     assert c.get(f"/v1/files/{file_id}", headers=OWN).json()["status"] == "pending"
@@ -450,3 +467,160 @@ def test_s3_adapter_reads_only_a_bounded_range_for_the_content_check():
             expected_params={"Bucket": "synthetic", "Key": key, "Range": "bytes=0-15"},
         )
         assert store.read_prefix(key, 16) is None
+
+
+# --- Follow-ups F1/F2 (2026-10-29): version-bound content read, late-PUT cleanup,
+# --- and no row lock or transaction held across object-store calls.
+
+
+def _status(db, ws, file_id):
+    with db.transaction(ws) as conn:
+        return conn.execute(
+            "SELECT status FROM media_files WHERE id=%s", (file_id,)
+        ).fetchone()[0]
+
+
+def test_completion_fails_closed_when_object_is_swapped_between_head_and_read(runtime):
+    c, db, ws, store = runtime
+    file_id, key = _stage(c, store, "image/png", "swap-1", PNG_PREFIX)
+
+    def swap(_key):
+        # Same metadata and a valid PNG prefix, but a different object version.
+        store.objects[key] = {**store.objects[key], "generation": 2}
+
+    store.after_head = swap
+    done = c.post(f"/v1/uploads/{file_id}/complete", headers=OWN)
+    assert done.status_code == 409, done.text
+    assert _status(db, ws, file_id) == "pending"
+    store.after_head = None
+    assert c.post(f"/v1/uploads/{file_id}/complete", headers=OWN).json()["status"] == "ready"
+
+
+def test_completion_fails_closed_when_store_reports_no_etag(runtime):
+    c, db, ws, store = runtime
+    file_id, _key = _stage(c, store, "image/png", "no-etag", PNG_PREFIX)
+    original = store.head
+    store.head = lambda key: {k: v for k, v in (original(key) or {}).items() if k != "etag"}
+    assert c.post(f"/v1/uploads/{file_id}/complete", headers=OWN).status_code == 409
+    assert _status(db, ws, file_id) == "pending"
+
+
+def test_completion_holds_no_row_lock_while_calling_the_store(runtime):
+    c, db, ws, store = runtime
+    file_id, _key = _stage(c, store, "image/png", "no-lock", PNG_PREFIX)
+    observed = []
+
+    def probe(_key):
+        try:
+            with db.transaction(ws) as conn:
+                conn.execute(
+                    "SELECT id FROM media_files WHERE id=%s FOR UPDATE NOWAIT", (file_id,)
+                )
+            observed.append("unlocked")
+        except Exception as exc:  # noqa: BLE001 - recorded for the assertion below
+            observed.append(type(exc).__name__)
+
+    store.after_head = probe
+    done = c.post(f"/v1/uploads/{file_id}/complete", headers=OWN)
+    assert observed == ["unlocked"]
+    assert done.status_code == 200, done.text
+
+
+def test_delete_during_verification_wins_and_completion_cleans_up(runtime):
+    c, db, ws, store = runtime
+    file_id, key = _stage(c, store, "image/png", "race-delete", PNG_PREFIX)
+    observed = []
+
+    def concurrent_delete(_key):
+        try:
+            with db.transaction(ws) as conn:
+                conn.execute("SET LOCAL lock_timeout = '2s'")
+                conn.execute(
+                    "UPDATE media_files SET status='deleted',deleted_at=now() WHERE id=%s",
+                    (file_id,),
+                )
+            observed.append("deleted")
+        except Exception as exc:  # noqa: BLE001 - recorded for the assertion below
+            observed.append(type(exc).__name__)
+
+    store.after_head = concurrent_delete
+    done = c.post(f"/v1/uploads/{file_id}/complete", headers=OWN)
+    assert observed == ["deleted"]
+    assert done.status_code == 404, done.text
+    assert _status(db, ws, file_id) == "deleted"
+    assert key not in store.objects
+
+
+def test_late_put_after_delete_is_removed_within_the_upload_window(runtime):
+    c, db, ws, store = runtime
+    created = c.post("/v1/uploads", json=BODY, headers={**OWN, "Idempotency-Key": "late-put"})
+    file_id = created.json()["id"]
+    key = created.json()["upload"]["url"].split("/upload/", 1)[1]
+    assert c.delete(f"/v1/files/{file_id}", headers=OWN).status_code == 204
+    assert store.deleted == [key]
+
+    def late_put():
+        # The still-valid presigned PUT recreates the object after deletion.
+        store.objects[key] = {
+            "size": BODY["size"],
+            "content_type": BODY["content_type"],
+            "checksum_sha256": BODY["checksum_sha256"],
+            "prefix": PNG_PREFIX,
+        }
+
+    late_put()
+    assert c.post(f"/v1/uploads/{file_id}/complete", headers=OWN).status_code == 404
+    assert key not in store.objects
+    late_put()
+    assert c.delete(f"/v1/files/{file_id}", headers=OWN).status_code == 204
+    assert key not in store.objects
+    assert _status(db, ws, file_id) == "deleted"
+    # Bounded: once the intent's upload window has closed no PUT URL can be valid,
+    # so replays stop touching the store.
+    with db.transaction(ws) as conn:
+        conn.execute(
+            "UPDATE media_files SET expires_at=now()-interval '1 second' WHERE id=%s",
+            (file_id,),
+        )
+    calls = len(store.deleted)
+    assert c.delete(f"/v1/files/{file_id}", headers=OWN).status_code == 204
+    assert c.post(f"/v1/uploads/{file_id}/complete", headers=OWN).status_code == 404
+    assert len(store.deleted) == calls
+
+
+def test_s3_adapter_binds_the_range_read_to_the_headed_etag():
+    import io
+
+    from botocore.response import StreamingBody
+    from botocore.stub import Stubber
+
+    from platform_media.adapters import S3ObjectStore
+
+    store = S3ObjectStore(
+        endpoint="https://objects.example.invalid",
+        bucket="synthetic",
+        access_key="synthetic-access",
+        secret_key="synthetic-secret",
+    )
+    key = str(uuid4()) + "/" + str(uuid4())
+    expected = {
+        "Bucket": "synthetic",
+        "Key": key,
+        "Range": "bytes=0-15",
+        "IfMatch": '"synthetic-etag-1"',
+    }
+    with Stubber(store.client) as stub:
+        stub.add_response(
+            "get_object",
+            {"Body": StreamingBody(io.BytesIO(PNG_PREFIX), len(PNG_PREFIX))},
+            expected,
+        )
+        assert store.read_prefix(key, 16, if_match='"synthetic-etag-1"') == PNG_PREFIX
+        stub.add_client_error(
+            "get_object",
+            service_error_code="PreconditionFailed",
+            http_status_code=412,
+            expected_params=expected,
+        )
+        assert store.read_prefix(key, 16, if_match='"synthetic-etag-1"') is None
+        stub.assert_no_pending_responses()
