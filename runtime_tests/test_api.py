@@ -1,5 +1,6 @@
 import os
-from uuid import UUID, uuid4
+from uuid import uuid4
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -7,7 +8,8 @@ from fastapi.testclient import TestClient
 @pytest.fixture
 def runtime(monkeypatch):
     from platform_backend_core import Database, MigrationRunner, Principal
-    from platform_media import create_app, MIGRATIONS
+
+    from platform_media import MIGRATIONS, create_app
 
     dsn = os.environ.get("PLATFORM_TEST_DSN")
     if not dsn:
@@ -77,7 +79,7 @@ BODY = {
 
 
 def test_upload_intent_is_bound_idempotent_and_workspace_isolated(runtime):
-    c, db, ws, store = runtime
+    c, _db, ws, store = runtime
     first = c.post("/v1/uploads", json=BODY, headers=OWN)
     assert first.status_code == 201, first.text
     value = first.json()
@@ -118,7 +120,7 @@ def test_upload_intent_is_bound_idempotent_and_workspace_isolated(runtime):
 
 
 def test_expiry_limits_and_no_caller_authority(runtime):
-    c, db, ws, store = runtime
+    c, db, ws, _store = runtime
     for body in [
         {**BODY, "key": "other/object"},
         {**BODY, "endpoint": "http://evil"},
@@ -143,7 +145,7 @@ def test_expiry_limits_and_no_caller_authority(runtime):
 def test_concurrent_uploads_and_force_rls(runtime):
     from concurrent.futures import ThreadPoolExecutor
 
-    c, db, ws, store = runtime
+    c, db, ws, _store = runtime
     with ThreadPoolExecutor(max_workers=6) as pool:
         results = list(
             pool.map(lambda _: c.post("/v1/uploads", json=BODY, headers=OWN), range(12))
@@ -163,8 +165,9 @@ def test_concurrent_uploads_and_force_rls(runtime):
 
 
 def test_missing_store_fails_closed():
-    from platform_media import create_app
     from platform_backend_core import Principal
+
+    from platform_media import create_app
 
     class V:
         def verify(self, auth):
@@ -192,8 +195,10 @@ def test_readiness_requires_provider_and_migrated_rls_schema():
 
 def test_actual_s3_adapter_binds_conditional_put_length_type_checksum_and_expiry():
     from urllib.parse import parse_qs, urlsplit
-    from platform_media.adapters import S3ObjectStore
+
     from botocore.stub import Stubber
+
+    from platform_media.adapters import S3ObjectStore
 
     store = S3ObjectStore(
         endpoint="https://objects.example.invalid",
@@ -251,11 +256,12 @@ def test_actual_s3_adapter_binds_conditional_put_length_type_checksum_and_expiry
 
 def test_authorization_is_from_real_verified_jwt_and_concrete_scope(runtime):
     import time
+
     import jwt
     from cryptography.hazmat.primitives.asymmetric import rsa
     from platform_backend_core import TokenVerifier
 
-    c, db, ws, store = runtime
+    c, _db, ws, _store = runtime
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     c.app.state.verifier = TokenVerifier(
         issuer="https://identity.example.invalid",
@@ -295,10 +301,12 @@ def test_authorization_is_from_real_verified_jwt_and_concrete_scope(runtime):
 
 def test_two_independent_api_pools_share_intent_and_rls(runtime, caplog):
     from concurrent.futures import ThreadPoolExecutor
+
     from platform_backend_core import Database
+
     from platform_media import create_app
 
-    c, db, ws, store = runtime
+    c, _db, _ws, store = runtime
     second = Database(os.environ["PLATFORM_TEST_DSN"], max_size=4)
     with TestClient(
         create_app(second, c.app.state.verifier, object_store=store)
@@ -324,7 +332,7 @@ def test_two_independent_api_pools_share_intent_and_rls(runtime, caplog):
 
 
 def test_pending_upload_queue_is_bounded_per_workspace_and_replay_still_works(runtime):
-    c, db, ws, store = runtime
+    c, db, ws, _store = runtime
     first = c.post("/v1/uploads", json=BODY, headers=OWN).json()
     with db.transaction(ws) as conn:
         conn.execute(

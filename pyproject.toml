@@ -23,3 +23,7 @@ pythonpath = ["src", "."]
 [tool.setuptools]
 packages = ["platform_media", "book_media_platform", "book_media_platform.graphics"]
 package-dir = {"platform_media" = "src/platform_media", "book_media_platform" = "book_media_platform"}
+
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI dependency markers are evaluated once by design.
+extend-immutable-calls = ["fastapi.Depends", "fastapi.Query", "fastapi.Header", "platform_backend_core.require_scope"]

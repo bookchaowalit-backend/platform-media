@@ -1,15 +1,17 @@
 import base64
-from contextlib import contextmanager
 import hashlib
 import json
+from contextlib import contextmanager
 from uuid import UUID, uuid4
-from fastapi.responses import JSONResponse
-from fastapi import Depends, Header, HTTPException, Query, Response
-from pydantic import BaseModel, ConfigDict, Field, field_validator
-from psycopg.rows import dict_row
-from platform_backend_core import create_app as core_app, require_scope
-from .adapters import ObjectStore
 
+from fastapi import Depends, Header, HTTPException, Query, Response
+from fastapi.responses import JSONResponse
+from platform_backend_core import create_app as core_app
+from platform_backend_core import require_scope
+from psycopg.rows import dict_row
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from .adapters import ObjectStore
 
 # Effective privileges used by runtime SQL; append-only effects need INSERT only.
 READINESS_PERMISSIONS = {
@@ -44,7 +46,7 @@ class Upload(BaseModel):
         try:
             if len(base64.b64decode(value, validate=True)) != 32:
                 raise ValueError()
-        except Exception:
+        except ValueError:  # binascii.Error is a ValueError
             raise ValueError("SHA256 must be 32 bytes encoded as base64") from None
         return value
 
@@ -127,7 +129,7 @@ def create_app(database, verifier, object_store: ObjectStore | None = None):
                 ):
                     raise ValueError("RLS unavailable")
             return {"status": "ready"}
-        except Exception:
+        except Exception:  # noqa: BLE001 - any probe failure is reported as unavailable without detail
             return JSONResponse({"status": "unavailable"}, status_code=503)
 
     def configured():
@@ -209,7 +211,7 @@ def create_app(database, verifier, object_store: ObjectStore | None = None):
                         row["checksum_sha256"],
                         min(row["remaining"], 3600),
                     )
-                except Exception:
+                except Exception:  # noqa: BLE001 - provider errors are redacted to 503
                     raise HTTPException(503, "object store unavailable") from None
             return value
 
@@ -231,7 +233,7 @@ def create_app(database, verifier, object_store: ObjectStore | None = None):
                 raise HTTPException(410, "upload intent expired")
             try:
                 actual = store.head(row["object_key"])
-            except Exception:
+            except Exception:  # noqa: BLE001 - provider errors are redacted to 503
                 raise HTTPException(503, "object store unavailable") from None
             expected = {
                 "size": row["size"],
@@ -278,7 +280,7 @@ def create_app(database, verifier, object_store: ObjectStore | None = None):
                 raise HTTPException(409, "file is not ready")
             try:
                 url = store.presign_get(row["object_key"], 300)
-            except Exception:
+            except Exception:  # noqa: BLE001 - provider errors are redacted to 503
                 raise HTTPException(503, "object store unavailable") from None
             return {"url": url, "expires_in": 300}
 
@@ -301,7 +303,7 @@ def create_app(database, verifier, object_store: ObjectStore | None = None):
             )
         try:
             store.delete(row["object_key"])
-        except Exception:
+        except Exception:  # noqa: BLE001 - provider errors are redacted to 503
             raise HTTPException(503, "object deletion pending; retry safely") from None
         with transaction(database, principal.workspace) as conn:
             conn.execute(

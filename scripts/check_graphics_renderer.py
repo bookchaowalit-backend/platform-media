@@ -1,9 +1,9 @@
 """Optional Windows renderer acceptance: missing prerequisites never count as a pass."""
 
-from pathlib import Path
 import os
 import sys
 import unittest
+from pathlib import Path
 
 
 def main() -> int:

@@ -11,3 +11,5 @@ build/
 *.py[cod]
 
 *.egg-info/
+wheelhouse/
+.venv/

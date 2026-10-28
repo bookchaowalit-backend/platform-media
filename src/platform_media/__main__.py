@@ -1,8 +1,9 @@
 import argparse
 import os
-from pathlib import Path
+
 from platform_backend_core import Database, MigrationRunner, TokenVerifier
-from . import create_app, MIGRATIONS
+
+from . import MIGRATIONS, create_app
 
 
 def main():
@@ -17,7 +18,7 @@ def main():
             parser.error("DATABASE_MIGRATION_DSN required")
         try:
             applied = MigrationRunner(dsn, namespace="platform_media").apply(MIGRATIONS)
-        except Exception:
+        except Exception:  # noqa: BLE001 - migration errors are reported without the DSN
             parser.exit(
                 1, "migration failed; inspect database access and migration history\n"
             )
@@ -38,7 +39,7 @@ def main():
         )
         database = Database(dsn, max_size=int(os.environ.get("DATABASE_POOL_MAX", "8")))
         app = create_app(database, verifier)
-    except Exception:
+    except Exception:  # noqa: BLE001 - startup errors are reported without configuration values
         parser.exit(1, "invalid service configuration\n")
     import uvicorn
 
