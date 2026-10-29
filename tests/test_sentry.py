@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Sentry is off without SENTRY_DSN; with it: errors only, no PII, locals, bodies or secrets."""
 
 from __future__ import annotations
