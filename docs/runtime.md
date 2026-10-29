@@ -34,6 +34,7 @@ privileged roles. Tenant tables ENABLE and FORCE RLS even for their owner.
 | `MEDIA_S3_ENDPOINT`, `MEDIA_S3_BUCKET` | Server-owned HTTPS S3-compatible destination |
 | `MEDIA_S3_ACCESS_KEY`, `MEDIA_S3_SECRET_KEY` | Explicit injected credentials; no credential-file or instance-profile discovery |
 | `MEDIA_S3_REGION` | Default `auto` for R2 |
+| `SENTRY_DSN` | Optional error reporting (unset = off); scrubbing in `src/platform_media/_sentry.py` |
 
 An incomplete object-store configuration disables uploads/downloads/deletes
 with 503. Invalid complete configuration fails startup. `/readyz` requires an
