@@ -54,7 +54,7 @@ pre-staged `wheelhouse/`. The `Dockerfile` is two stages:
 
 1. `build` (`python:3.12-slim` plus `git`): `pip wheel` builds this distribution
    (`platform_media` and `book_media_platform`) and `platform-backend-core` from the
-   same reviewed commit CI installs (`d00e0119c2e47da3942d9c7b4b88828953f8bc5a`),
+   same reviewed commit CI installs (`88306b28228f789eecd214a11ca8a0640e9d6233`),
    with all transitive dependencies (`boto3`, `uvicorn`, ...).
 2. `runtime` (`python:3.12-slim`, no git, no build tools): installs only those
    wheels with `--no-index`, runs as UID/GID `65532`, `PORT=8080`, and keeps
@@ -329,7 +329,7 @@ Changes beyond the rebase:
   fixture `fixtures/gates/media-content-type.json` (13 synthetic cases).
 
 Environment: Python 3.12, PostgreSQL 16 (local `pgserver`; CI uses the
-`postgres:16` service), `platform-backend-core` at `d00e0119`, no network
+`postgres:16` service), `platform-backend-core` at `88306b28`, no network
 calls, no credentials. `PLATFORM_TEST_DSN` pointed at the disposable local
 server.
 
@@ -413,7 +413,7 @@ runtime_tests` -> 7 failed, 18 passed:
   complete/DELETE replay.
 
 GREEN after the change (Python 3.12, local `pgserver` PostgreSQL 16, core
-`d00e0119`, Stubber only, no network or credentials):
+`88306b28`, Stubber only, no network or credentials):
 
 - `python -m pytest -q runtime_tests`: 25 passed.
 - `BOOK_MEDIA_SKIP_RENDERER_TESTS=1 python -m pytest -q -rs`: 100 passed,
@@ -471,7 +471,7 @@ RED (`runtime_tests/test_sweeper.py` written first against `main` `0f87511`):
 One test helper indexed tuple rows by name. It was fixed during GREEN; the
 assertions did not change.
 
-GREEN (Python 3.12, local `pgserver` PostgreSQL 16, core `d00e0119`, in-memory
+GREEN (Python 3.12, local `pgserver` PostgreSQL 16, core `88306b28`, in-memory
 store and botocore Stubber only, no network or credentials):
 
 - `python -m pytest -q runtime_tests`: 35 passed (10 new).
