@@ -423,6 +423,16 @@ class SpanScrubberTests(unittest.TestCase):
             with self.subTest(text=text[:30]):
                 self.assertNotIn("PPPPPPPPPP", _sentry.scrub(text))
 
+    def test_scrub_overlapping_bearer_labels_and_trailing_backslash(self):
+        self._assert_scrubbed([
+            # one label's token can be the next label ("Bearer Bearer X"); every token must still go
+            ("auth Bearer Bearer SECRET_X done", "SECRET_X"),
+            ("password=Bearer Authorization=Bearer OPAQUE_CRED", "OPAQUE_CRED"),
+            # an unquoted value ending in a lone backslash keeps nothing
+            ("password=abc\\", "\\"),
+            ("password=\\", "\\"),
+        ])
+
     def test_scrub_recipient_next_to_a_secret(self):
         # Recipient keys are found on the original text too, so a credential value cannot hide them.
         self._assert_scrubbed([
