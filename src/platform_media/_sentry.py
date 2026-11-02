@@ -152,7 +152,8 @@ def _secret_spans(text: str) -> list[tuple[int, int]]:
     spans = [(m.end("head"), m.end()) for m in _URL_PASSWORD.finditer(text)]
     spans += [(m.end("head") + 1, m.end()) for m in _URL_QUERY.finditer(text)]
     # A libpq value can run through a neighbouring field's "Bearer" label, so tokens are found here.
-    spans += [m.span("token") for m in _BEARER_TOKEN.finditer(text)]
+    # A token that runs into "@" is an email's local part: the email pass takes the whole address.
+    spans += [m.span("token") for m in _BEARER_TOKEN.finditer(text) if not text.startswith("@", m.end("token"))]
     # A URL past the pattern bounds can still carry a password or a query, and a JWT can be too long
     # to match. Decide that here, on the original token: once another span or the IP pass redacts
     # part of it (token=x@h, a -192.0.2.1 tail), its "@", "?" or dots are gone.
@@ -194,9 +195,10 @@ def scrub(text: str) -> str:
         cut = max(head.rfind(" "), head.rfind("\n"), head.rfind("\t"))
         text = head[:cut] if cut > 0 else ""
     text = _redact(text, _secret_spans(text))
+    # Emails first: "Bearer alice@example.com" must lose its domain too, not only the local part.
+    text = _EMAIL.sub("***email***", text)
     text = _BEARER.sub("Bearer ***", text)
     text = _JWT.sub("***jwt***", text)
-    text = _EMAIL.sub("***email***", text)
     text = _PHONE.sub("***phone***", text)
     text = _IPV4.sub("***ip***", text)
     text = _IPV6.sub("***ip***", text)
