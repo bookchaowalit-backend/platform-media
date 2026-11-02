@@ -141,13 +141,16 @@ def _secret_spans(text: str) -> list[tuple[int, int]]:
     spans += [(m.end("head") + 1, m.end()) for m in _URL_QUERY.finditer(text)]
     # A libpq value can run through a neighbouring field's "Bearer" label, so tokens are found here.
     spans += [m.span("token") for m in _BEARER_TOKEN.finditer(text)]
-    # A URL past the pattern bounds can still carry a password or a query. Decide that here, on the
-    # original token: once another span redacts part of it (token=x@h), its "@" or "?" is gone.
+    # A URL past the pattern bounds can still carry a password or a query, and a JWT can be too long
+    # to match. Decide that here, on the original token: once another span or the IP pass redacts
+    # part of it (token=x@h, a -192.0.2.1 tail), its "@", "?" or dots are gone.
     for tok in _NON_SPACE.finditer(text):
-        url = tok.group()
-        if "://" in url and (
-            url.count("@") != len(_URL_PASSWORD.findall(url)) or url.count("?") != len(_URL_QUERY.findall(url))
-        ):
+        word = tok.group()
+        open_url = "://" in word and (
+            word.count("@") != len(_URL_PASSWORD.findall(word)) or word.count("?") != len(_URL_QUERY.findall(word))
+        )
+        open_jwt = "eyJ" in word and word.count(".") >= 2 and not _JWT.search(word)
+        if open_url or open_jwt:
             spans.append(tok.span())
     keys = list(_KV_KEY.finditer(text)) + list(_KV_PII_KEY.finditer(text))
     if keys:
