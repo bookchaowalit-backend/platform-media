@@ -433,6 +433,15 @@ class SpanScrubberTests(unittest.TestCase):
             ("password=\\", "\\"),
         ])
 
+    def test_scrub_oversized_jwt_decided_on_the_original_text(self):
+        # an oversized JWT with a dotted numeric tail: IP redaction must not erase the dots that mark it
+        for text in (
+            "token eyJhbGciOiJSUzI1NiJ9." + "Q" * 5000 + "-192.0.2.1 rejected",
+            "token eyJhbGciOiJSUzI1NiJ9." + "Q" * 5000 + ".2001:db8::1 rejected",
+        ):
+            with self.subTest(text=text[-25:]):
+                self.assertNotIn("QQQQQQQQ", _sentry.scrub(text))
+
     def test_scrub_recipient_next_to_a_secret(self):
         # Recipient keys are found on the original text too, so a credential value cannot hide them.
         self._assert_scrubbed([
