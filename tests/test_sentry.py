@@ -457,6 +457,13 @@ class SpanScrubberTests(unittest.TestCase):
             ("auth Bearer " + "A" * 5000 + "@tail-domain.example x", "tail-domain"),
         ])
 
+    def test_scrub_bearer_token_with_an_at_suffix(self):
+        # a bearer token followed by "@" that is not a full email must still go
+        self._assert_scrubbed([
+            ("https://h/?q=Bearer OPAQUE@internal", "OPAQUE"),
+            ("auth Bearer TOKEN_Z@internal-host x", "internal-host"),
+        ])
+
     def test_scrub_recipient_next_to_a_secret(self):
         # Recipient keys are found on the original text too, so a credential value cannot hide them.
         self._assert_scrubbed([
