@@ -88,6 +88,7 @@ class SentryTests(unittest.TestCase):
         (logging_integration,) = kw["integrations"]
         self.assertIsNone(logging_integration._handler)
         self.assertIsNone(logging_integration._breadcrumb_handler)
+        self.assertIsNone(logging_integration._sentry_logs_handler)
         self.assertEqual(tags, {"service": "media-api"})
         self.assertIn("sentry: enabled for media-api", err.getvalue())
 
@@ -175,6 +176,110 @@ class SentryTests(unittest.TestCase):
         }
         out = _sentry._scrub_event(event, {})
         self.assertEqual(out["contexts"]["trace"], {"trace_id": "t"})
+
+
+class HardeningTests(unittest.TestCase):
+    """Ported from platform-security 7deddff: bounded patterns, fail-closed, quoted values, IPs."""
+
+    def test_app_reports_errors_inside_the_core_boundary(self):
+        # The shared core's boundary turns unexpected exceptions into a redacted 500 before an
+        # outer ASGI layer sees them; the runtime test proves the event, this pins the wiring.
+        app = (_PATH.parent / "app.py").read_text(encoding="utf-8")
+        self.assertIn("app.user_middleware.append(Middleware(CaptureErrors))", app)
+
+    def test_capture_errors_reraises_and_reports(self):
+        captured: list[BaseException] = []
+        fake = type("Fake", (), {"capture_exception": staticmethod(captured.append)})
+
+        async def broken(scope, receive, send):
+            raise RuntimeError("boom")
+
+        import asyncio
+
+        with mock.patch.dict(sys.modules, {"sentry_sdk": fake}), self.assertRaises(RuntimeError):
+            asyncio.run(_sentry.CaptureErrors(broken)({}, None, None))
+        self.assertEqual([str(e) for e in captured], ["boom"])
+
+    def test_scrub_removes_ips(self):
+        out = _sentry.scrub("from 203.0.113.77 and 2001:db8:85a3:0:0:8a2e:370:7334")
+        for ip in ("203.0.113.77", "8a2e:370:7334"):
+            self.assertNotIn(ip, out)
+
+    def test_scrub_catches_prefixed_quoted_and_query_string_secrets(self):
+        for text, secret in [
+            ("refresh failed: access_token=tok-AAA111 expired", "tok-AAA111"),
+            ("client_secret=cs-BBB222&grant_type=client_credentials", "cs-BBB222"),
+            ("bad config {'password': 'pw-CCC333', 'name': 'x'}", "pw-CCC333"),
+            ('bad body {"api_key": "ak-DDD444"}', "ak-DDD444"),
+            ('DB_PASSWORD="pw-EEE555" rejected', "pw-EEE555"),
+            ("GET https://h.example/cb?code=c-FFF666&state=s-GGG777 failed", "c-FFF666"),
+        ]:
+            with self.subTest(text=text):
+                out = _sentry.scrub(text)
+                self.assertNotIn(secret, out)
+                self.assertNotIn("s-GGG777", out)
+
+    def test_scrub_complete_quoted_values_and_compressed_ipv6(self):
+        for text, secret in [
+            ("login password='correct horse battery staple' failed", "battery staple"),
+            ("cfg {'password': 'prefix,SECRET_SUFFIX'}", "SECRET_SUFFIX"),
+            ('cfg {"client_secret": "a\\"b SECRET_ESC"}', "SECRET_ESC"),
+            ('payload {"recipient": "Jane Q Public, 1 Main Rd"}', "1 Main Rd"),
+            ("dial from 2001:db8::7334 refused", "2001:db8::7334"),
+            ("peer fe80::1ff:fe23:4567:890a closed", "fe80::1ff"),
+            ("bind ::1 ok", "::1"),
+        ]:
+            with self.subTest(text=text):
+                self.assertNotIn(secret, _sentry.scrub(text))
+
+    def test_scrub_keeps_rust_paths_and_times(self):
+        for text in ("std::vec::Vec failed", "at 12:30:45 UTC", "Foo::bar() raised"):
+            with self.subTest(text=text):
+                self.assertEqual(_sentry.scrub(text), text)
+
+    def test_scrub_event_tolerates_missing_or_odd_fields(self):
+        for value in (None, 42):
+            event = {"exception": {"values": [{"value": value}]}, "request": "x", "logentry": None}
+            out = _sentry._scrub_event(event, {})
+            self.assertEqual(out["exception"]["values"][0]["value"], value)
+
+    def test_scrub_is_bounded_on_long_hostile_input(self):
+        import time
+
+        n = _sentry.MAX_INPUT_CHARS - 64  # under the pre-cap, so every pattern really runs
+        for hostile in (
+            "a" * n, "x_" * (n // 2), "a://" * (n // 4), "a." * (n // 2), "%" * n,
+            "a://b:" * (n // 6), "x@" + "a-" * (n // 2), "eyJ-" * (n // 4), "+1" * (n // 2),
+            "to=" * (n // 3), 'to: "' * (n // 5), "a" * 200_000,
+        ):
+            start = time.perf_counter()
+            out = _sentry.scrub(hostile + " password")
+            self.assertLess(time.perf_counter() - start, 0.5)
+            self.assertLessEqual(len(out), _sentry.MAX_SCRUB_CHARS + len(_sentry.TRUNCATED))
+
+    def test_scrub_fails_closed_at_bounds_and_cap(self):
+        for text, secret in [
+            # a credential straddling the length cap must not survive as a partial token
+            ("x " * 4080 + "postgresql://u:" + "S" * 40 + "@h/db", "SSSSSSSSSS"),
+            # past the pattern bounds the whole URL token is redacted (fail closed)
+            ("dial postgresql://" + "u" * 300 + ":pw-HHH888@h/db", "pw-HHH888"),
+            ("GET https://h.example/" + "p" * 3000 + "?code=c-III999 failed", "c-III999"),
+            ("dial postgresql://u:" + "P" * 600 + "@h/db", "PPPPPPPPPP"),
+            ("from " + "L" * 100 + "@example.com", "LLLLLLLLLL"),
+            # one scrubbed URL must not vouch for an unscrubbed one in the same token
+            ("a://x:pw-OK1@h/b://" + "u" * 300 + ":pw-ZZZ000@h2", "pw-ZZZ000"),
+            ("https://h/?a=1&r=https://" + "h" * 600 + "/p?code=c-YYY000", "c-YYY000"),
+            ("token eyJhbGciOiJSUzI1NiJ9." + "Q" * 5000 + ".sig-XXX000 rejected", "sig-XXX000"),
+            (
+                "token eyJhbGciOiJSUzI1NiJ9" "." "eyJzdWIiOiJ4In0" "." + "S" * 4096
+                + "TAIL-WWW000 rejected",
+                "TAIL-WWW000",
+            ),
+        ]:
+            with self.subTest(secret=secret):
+                out = _sentry.scrub(text)
+                self.assertNotIn(secret, out)
+                self.assertLessEqual(len(out), _sentry.MAX_SCRUB_CHARS + len(_sentry.TRUNCATED))
 
 
 if __name__ == "__main__":
