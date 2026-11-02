@@ -35,13 +35,15 @@ _QUOTED_AT = {
     "'": re.compile(r"'(?:[^'\\]|\\[\s\S]){0,512}'"),
 }
 _FIELD_AT = re.compile(r"""[^\s&"',}\\]{1,512}""")
-_LIBPQ_AT = re.compile(r"""(?:\\[\s\S]|[^\s\\]){1,512}""")
+# (a lone backslash at the very end is part of the value too)
+_LIBPQ_AT = re.compile(r"""(?:\\[\s\S]|\\\Z|[^\s\\]){1,512}""")
 # scheme://host/path?query -> scheme://host/path?*** (OAuth codes, signed-URL tokens)
 _URL_QUERY = re.compile(r"(?P<head>[a-zA-Z][a-zA-Z0-9+.-]{0,31}://[^\s?#]{0,512})\?[^\s#]*")
 _BEARER = re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]+")
-# Unbounded on purpose: a bounded token would leave its tail behind the "***". Still linear: matches
-# start only at a "bearer" label and never overlap.
-_BEARER_TOKEN = re.compile(r"(?i)\bbearer\s+(?P<token>[A-Za-z0-9._~+/=-]+)")
+# Unbounded on purpose: a bounded token would leave its tail behind the "***". A lookahead, so
+# labels can overlap ("Bearer Bearer X": the first token is the second label). Still linear: a
+# token ends at whitespace, so it cannot contain another "bearer " label to rescan.
+_BEARER_TOKEN = re.compile(r"(?i)\bbearer\s+(?=(?P<token>[A-Za-z0-9._~+/=-]+))")
 _JWT = re.compile(r"\beyJ[A-Za-z0-9_-]{5,4096}\.[A-Za-z0-9_-]{5,4096}\.[A-Za-z0-9_-]{0,4096}")
 _EMAIL = re.compile(r"[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}")
 # E.164-style phone numbers (+ and 7-15 digits, optional separators)
@@ -138,7 +140,7 @@ def _secret_spans(text: str) -> list[tuple[int, int]]:
     spans = [(m.end("head"), m.end()) for m in _URL_PASSWORD.finditer(text)]
     spans += [(m.end("head") + 1, m.end()) for m in _URL_QUERY.finditer(text)]
     # A libpq value can run through a neighbouring field's "Bearer" label, so tokens are found here.
-    spans += [(m.start("token"), m.end()) for m in _BEARER_TOKEN.finditer(text)]
+    spans += [m.span("token") for m in _BEARER_TOKEN.finditer(text)]
     # A URL past the pattern bounds can still carry a password or a query. Decide that here, on the
     # original token: once another span redacts part of it (token=x@h), its "@" or "?" is gone.
     for tok in _NON_SPACE.finditer(text):
