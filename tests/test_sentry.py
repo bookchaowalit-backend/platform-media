@@ -449,6 +449,14 @@ class SpanScrubberTests(unittest.TestCase):
             ("dial postgresql://u:" + "S" * 600 + "x://a:b@c/d@h/db failed", "SSSSSSSSSS"),
         ])
 
+    def test_scrub_email_behind_a_bearer_label(self):
+        # a bearer span must not take an email's local part and leave its domain behind
+        self._assert_scrubbed([
+            ("password=Bearer user=alice@sensitive-customer.example", "sensitive-customer"),
+            ("Authorization: Bearer alice@example.com", "example.com"),
+            ("auth Bearer " + "A" * 5000 + "@tail-domain.example x", "tail-domain"),
+        ])
+
     def test_scrub_recipient_next_to_a_secret(self):
         # Recipient keys are found on the original text too, so a credential value cannot hide them.
         self._assert_scrubbed([
