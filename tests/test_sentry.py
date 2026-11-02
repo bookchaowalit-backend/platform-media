@@ -197,7 +197,7 @@ class HardeningTests(unittest.TestCase):
             mechanisms.append(mechanism)
             return {"exception": str(exc)}, {"exc": exc}
 
-        client = type("Client", (), {"options": {}})()
+        client = type("Client", (), {"options": {}, "transport": object(), "is_active": lambda self: True})()
         sdk = type("Sdk", (), {
             "get_client": staticmethod(lambda: client),
             "capture_event": staticmethod(lambda event, hint=None: captured.append((event, hint))),
@@ -216,6 +216,35 @@ class HardeningTests(unittest.TestCase):
             asyncio.run(_sentry.CaptureErrors(broken)({}, None, None))
         self.assertEqual([event for event, _ in captured], [{"exception": "boom"}])
         self.assertEqual(mechanisms, [{"type": "asgi", "handled": False}])
+
+    def test_capture_errors_skips_building_an_event_without_a_transport(self):
+        # Building the event reads traceback locals; with nothing to send it must not happen at all.
+        built: list[Any] = []
+        for client in (
+            type("Off", (), {"options": {}, "transport": None, "is_active": lambda self: False})(),
+            type("NoTransport", (), {"options": {}, "transport": None, "is_active": lambda self: True})(),
+        ):
+            sdk = type("Sdk", (), {
+                "get_client": staticmethod(lambda client=client: client),
+                "capture_event": staticmethod(lambda event, hint=None: built.append(event)),
+            })
+            def event_from_exception(*args: Any, **kwargs: Any) -> tuple[dict[str, Any], dict[str, Any]]:
+                built.append(args)
+                return {}, {}
+
+            utils = type("Utils", (), {"event_from_exception": staticmethod(event_from_exception)})
+
+            async def broken(scope, receive, send):
+                raise RuntimeError("boom")
+
+            import asyncio
+
+            with (
+                mock.patch.dict(sys.modules, {"sentry_sdk": sdk, "sentry_sdk.utils": utils}),
+                self.assertRaises(RuntimeError),
+            ):
+                asyncio.run(_sentry.CaptureErrors(broken)({}, None, None))
+        self.assertEqual(built, [])
 
     def test_scrub_removes_ips(self):
         out = _sentry.scrub("from 203.0.113.77 and 2001:db8:85a3:0:0:8a2e:370:7334")
@@ -383,6 +412,16 @@ class SpanScrubberTests(unittest.TestCase):
         out = _sentry.scrub("auth Bearer " + "A" * 5000 + "TAIL_" + "SECRET x")
         self.assertNotIn("TAIL_SECRET", out)
         self.assertNotIn("AAAA", out)
+
+    def test_scrub_overlong_url_password_decided_on_the_original_text(self):
+        # An overlong URL password holding a key=value: the key's value span must not erase the
+        # "@" that tells the fail-closed pass this token is still a credential URL.
+        for text in (
+            "dial postgresql://u:" + "P" * 600 + "token=x@h/db failed",
+            "dial https://u:" + "P" * 600 + "secret=x@h failed",
+        ):
+            with self.subTest(text=text[:30]):
+                self.assertNotIn("PPPPPPPPPP", _sentry.scrub(text))
 
     def test_scrub_recipient_next_to_a_secret(self):
         # Recipient keys are found on the original text too, so a credential value cannot hide them.

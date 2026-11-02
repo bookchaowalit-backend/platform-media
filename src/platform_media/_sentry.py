@@ -62,6 +62,7 @@ MAX_SCRUB_CHARS = 8192
 MAX_INPUT_CHARS = 65536
 TRUNCATED = "...[truncated]"
 _TOKENS = re.compile(r"(\s+)")
+_NON_SPACE = re.compile(r"\S+")
 
 
 def _fail_closed(text: str) -> str:
@@ -138,6 +139,14 @@ def _secret_spans(text: str) -> list[tuple[int, int]]:
     spans += [(m.end("head") + 1, m.end()) for m in _URL_QUERY.finditer(text)]
     # A libpq value can run through a neighbouring field's "Bearer" label, so tokens are found here.
     spans += [(m.start("token"), m.end()) for m in _BEARER_TOKEN.finditer(text)]
+    # A URL past the pattern bounds can still carry a password or a query. Decide that here, on the
+    # original token: once another span redacts part of it (token=x@h), its "@" or "?" is gone.
+    for tok in _NON_SPACE.finditer(text):
+        url = tok.group()
+        if "://" in url and (
+            url.count("@") != len(_URL_PASSWORD.findall(url)) or url.count("?") != len(_URL_QUERY.findall(url))
+        ):
+            spans.append(tok.span())
     keys = list(_KV_KEY.finditer(text)) + list(_KV_PII_KEY.finditer(text))
     if keys:
         nxt = _next_unescaped_whitespace(text)
@@ -232,10 +241,12 @@ class CaptureErrors:
             from sentry_sdk.utils import event_from_exception
 
             client = sentry_sdk.get_client()
-            event, hint = event_from_exception(
-                exc, client_options=client.options, mechanism={"type": "asgi", "handled": False}
-            )
-            sentry_sdk.capture_event(event, hint=hint)
+            # Building the event reads traceback locals; skip it when nothing would be sent.
+            if client.is_active() and client.transport is not None:
+                event, hint = event_from_exception(
+                    exc, client_options=client.options, mechanism={"type": "asgi", "handled": False}
+                )
+                sentry_sdk.capture_event(event, hint=hint)
             raise
 
 
