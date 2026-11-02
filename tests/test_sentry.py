@@ -378,6 +378,12 @@ class SpanScrubberTests(unittest.TestCase):
             ("password=p,api_key= \\OPAQUE_BS", "OPAQUE_BS"),
         ])
 
+    def test_scrub_whole_bearer_token_past_any_length_bound(self):
+        # Built from parts; a tail past a span bound must not survive behind the "***".
+        out = _sentry.scrub("auth Bearer " + "A" * 5000 + "TAIL_" + "SECRET x")
+        self.assertNotIn("TAIL_SECRET", out)
+        self.assertNotIn("AAAA", out)
+
     def test_scrub_recipient_next_to_a_secret(self):
         # Recipient keys are found on the original text too, so a credential value cannot hide them.
         self._assert_scrubbed([

@@ -39,7 +39,9 @@ _LIBPQ_AT = re.compile(r"""(?:\\[\s\S]|[^\s\\]){1,512}""")
 # scheme://host/path?query -> scheme://host/path?*** (OAuth codes, signed-URL tokens)
 _URL_QUERY = re.compile(r"(?P<head>[a-zA-Z][a-zA-Z0-9+.-]{0,31}://[^\s?#]{0,512})\?[^\s#]*")
 _BEARER = re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]+")
-_BEARER_TOKEN = re.compile(r"(?i)\bbearer\s+(?P<token>[A-Za-z0-9._~+/=-]{1,4096})")
+# Unbounded on purpose: a bounded token would leave its tail behind the "***". Still linear: matches
+# start only at a "bearer" label and never overlap.
+_BEARER_TOKEN = re.compile(r"(?i)\bbearer\s+(?P<token>[A-Za-z0-9._~+/=-]+)")
 _JWT = re.compile(r"\beyJ[A-Za-z0-9_-]{5,4096}\.[A-Za-z0-9_-]{5,4096}\.[A-Za-z0-9_-]{0,4096}")
 _EMAIL = re.compile(r"[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}")
 # E.164-style phone numbers (+ and 7-15 digits, optional separators)
