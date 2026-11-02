@@ -58,7 +58,11 @@ def test_a_server_500_reaches_sentry_scrubbed(monkeypatch):
         assert r.status_code == 500 and r.json() == {'detail': 'internal server error'}
         sentry_sdk.flush()
         assert len(events) == 1
+        # Reported as unhandled, so unhandled-error filters and alerts still see server failures.
+        assert events[0]['exception']['values'][-1]['mechanism']['handled'] is False
         text = str(events[0])
         assert 'RuntimeError' in text and 'pw-SRV500' not in text and '203.0' '.113.9' not in text
     finally:
-        real_init(dsn=None)
+        # dsn=None would read SENTRY_DSN (still set here) and start a real, unscrubbed client.
+        real_init(dsn='')
+    assert sentry_sdk.get_client().transport is None  # nothing can leave the test process

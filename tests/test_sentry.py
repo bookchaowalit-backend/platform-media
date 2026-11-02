@@ -81,6 +81,8 @@ class SentryTests(unittest.TestCase):
         self.assertEqual(kw["environment"], "production")
         self.assertEqual(kw["release"], "abc123")
         self.assertIsNone(kw["traces_sample_rate"])
+        # No tracing also means no forwarding of incoming sentry-trace/baggage (user ids).
+        self.assertEqual(kw["trace_propagation_targets"], [])
         self.assertIs(kw["send_default_pii"], False)
         self.assertIs(kw["include_local_variables"], False)
         self.assertEqual(kw["max_request_body_size"], "never")
@@ -187,18 +189,33 @@ class HardeningTests(unittest.TestCase):
         app = (_PATH.parent / "app.py").read_text(encoding="utf-8")
         self.assertIn("app.user_middleware.append(Middleware(CaptureErrors))", app)
 
-    def test_capture_errors_reraises_and_reports(self):
-        captured: list[BaseException] = []
-        fake = type("Fake", (), {"capture_exception": staticmethod(captured.append)})
+    def test_capture_errors_reports_unhandled_and_reraises(self):
+        captured: list[tuple[Any, Any]] = []
+        mechanisms: list[dict[str, Any]] = []
+
+        def event_from_exception(exc, client_options=None, mechanism=None):
+            mechanisms.append(mechanism)
+            return {"exception": str(exc)}, {"exc": exc}
+
+        client = type("Client", (), {"options": {}})()
+        sdk = type("Sdk", (), {
+            "get_client": staticmethod(lambda: client),
+            "capture_event": staticmethod(lambda event, hint=None: captured.append((event, hint))),
+        })
+        utils = type("Utils", (), {"event_from_exception": staticmethod(event_from_exception)})
 
         async def broken(scope, receive, send):
             raise RuntimeError("boom")
 
         import asyncio
 
-        with mock.patch.dict(sys.modules, {"sentry_sdk": fake}), self.assertRaises(RuntimeError):
+        with (
+            mock.patch.dict(sys.modules, {"sentry_sdk": sdk, "sentry_sdk.utils": utils}),
+            self.assertRaises(RuntimeError),
+        ):
             asyncio.run(_sentry.CaptureErrors(broken)({}, None, None))
-        self.assertEqual([str(e) for e in captured], ["boom"])
+        self.assertEqual([event for event, _ in captured], [{"exception": "boom"}])
+        self.assertEqual(mechanisms, [{"type": "asgi", "handled": False}])
 
     def test_scrub_removes_ips(self):
         out = _sentry.scrub("from 203.0.113.77 and 2001:db8:85a3:0:0:8a2e:370:7334")
@@ -250,13 +267,14 @@ class HardeningTests(unittest.TestCase):
         for hostile in (
             "a" * n, "x_" * (n // 2), "a://" * (n // 4), "a." * (n // 2), "%" * n,
             "a://b:" * (n // 6), "x@" + "a-" * (n // 2), "eyJ-" * (n // 4), "+1" * (n // 2),
-            "to=" * (n // 3), 'to: "' * (n // 5), "a" * 200_000,
+            "to=" * (n // 3), 'to: "' * (n // 5), "token=" * (n // 6), "pwd:" * (n // 4),
+            'token="' * (n // 7), 'recipient="' * (n // 11), "a" * 200_000,
         ):
             start = time.perf_counter()
             out = _sentry.scrub(hostile + " password")
-            # Linear work takes about 0.3 s on a laptop and up to 2x that on a slow CI runner; a
-            # super-linear pattern on 64 KiB would take far longer.
-            self.assertLess(time.perf_counter() - start, 1.5)
+            # ~0.3 s locally, up to 2x on a slow CI runner; the quadratic patterns this guards
+            # against took 3 s to over 120 s on the same input.
+            self.assertLess(time.perf_counter() - start, 2.0)
             self.assertLessEqual(len(out), _sentry.MAX_SCRUB_CHARS + len(_sentry.TRUNCATED))
 
     def test_scrub_fails_closed_at_bounds_and_cap(self):
@@ -282,6 +300,91 @@ class HardeningTests(unittest.TestCase):
                 out = _sentry.scrub(text)
                 self.assertNotIn(secret, out)
                 self.assertLessEqual(len(out), _sentry.MAX_SCRUB_CHARS + len(_sentry.TRUNCATED))
+
+
+class SpanScrubberTests(unittest.TestCase):
+    """Ported from platform-security fbf5eef, plus bearer and recipient spans found on the original text."""
+
+    def _assert_scrubbed(self, cases):
+        for text, secret in cases:
+            with self.subTest(text=text):
+                self.assertNotIn(secret, _sentry.scrub(text))
+
+    def test_scrub_escaped_newlines_and_colon_prefixed_ipv6(self):
+        self._assert_scrubbed([
+            ("cfg password='abc\\\nSECRET_NL tail' end", "SECRET_NL"),
+            ('cfg {"token": "x\\\ny SECRET_NL2"}', "SECRET_NL2"),
+            ("peer:2001:db8::1 closed", "2001:db8"),
+            ("addr=fe80::1:2: refused", "fe80::1"),
+            ("dial [::1]:8080 failed", "::1"),
+        ])
+
+    def test_scrub_complete_unquoted_libpq_values(self):
+        for text, secret in [
+            ("connect host=db password=,SENSITIVE_VALUE dbname=x", "SENSITIVE_VALUE"),
+            ("connect host=db password=prefix,SECRET_SUFFIX dbname=x", "SECRET_SUFFIX"),
+            ("connect password=a\\ SECRET_SPACE dbname=x", "SECRET_SPACE"),
+            ("connect password=pre}SECRET_BRACE x", "SECRET_BRACE"),
+            ("connect password=pre'SECRET_QUOTE x", "SECRET_QUOTE"),
+        ]:
+            with self.subTest(text=text):
+                out = _sentry.scrub(text)
+                self.assertNotIn(secret, out)
+                self.assertTrue("dbname=x" in out or "dbname" not in text)
+
+    def test_scrub_adjacent_structured_fields(self):
+        self._assert_scrubbed([
+            ('{"token":null,"password":"prefix SECRET_SUFFIX"}', "SECRET_SUFFIX"),
+            ("{'token': 1, 'client_secret': 'a b SECRET_TWO'}", "SECRET_TWO"),
+            ('password=x,api_key="k SECRET_THREE"', "SECRET_THREE"),
+            ('{"pwd":"","secret":"s SECRET_FOUR"}', "SECRET_FOUR"),
+        ])
+
+    def test_scrub_patterns_cannot_consume_each_others_keys(self):
+        for text, secret in [
+            ("password=foo,token= sslpassword='prefix SECRET_SUFFIX' dbname=x", "SECRET_SUFFIX"),
+            ('{"url":"https://example.test/?x=1","password":"prefix SECRET_SUFFIX"}', "SECRET_SUFFIX"),
+            ('see https://h/p?token=t-AAA&next=1 and {"secret":"s b SECRET_B"}', "SECRET_B"),
+            ('{"token":"a b SECRET_C","url":"https://h/?q=1"}', "SECRET_C"),
+            ('token=token=token= password="x y SECRET_D"', "SECRET_D"),
+        ]:
+            with self.subTest(text=text):
+                out = _sentry.scrub(text)
+                self.assertNotIn(secret, out)
+                self.assertNotIn("t-AAA", out)
+
+    @unittest.skipIf(importlib.util.find_spec("psycopg") is None, "psycopg not installed")
+    def test_scrub_serialised_libpq_dsn_with_escaped_quote(self):
+        # repr()/str() of a libpq DSN doubles its backslashes, so the escaped quote looks like the
+        # closing one; the redaction must still cover the whole password.
+        make_conninfo = importlib.import_module("psycopg.conninfo").make_conninfo
+        dsn = make_conninfo(password="a' b " + "SECRET_DSN")
+        for text in (repr(dsn), repr({"dsn": dsn}), str(ValueError("connect", dsn)), dsn):
+            self.assertNotIn("SECRET_DSN", _sentry.scrub(text))
+
+    def test_scrub_value_starting_with_an_escaped_quote(self):
+        self._assert_scrubbed([
+            ("cfg password=\\'a \"b\" c SECRET_EQ\\' end", "SECRET_EQ"),
+            ("cfg password=\\\"a 'b' c SECRET_EQ\\\" end", "SECRET_EQ"),
+        ])
+
+    def test_scrub_bearer_token_behind_a_consumed_label(self):
+        # A libpq value can run through an adjacent field's "Bearer" label; the token must still go.
+        self._assert_scrubbed([
+            ("password=p,Authorization=Bearer OPAQUE_CRED", "OPAQUE_CRED"),
+            ('{"password":null,"authorization":"Bearer SENSITIVE_VALUE"}', "SENSITIVE_VALUE"),
+            ('{"password":"pw","authorization":"Bearer TOP_SECRET_TOKEN"}', "TOP_SECRET_TOKEN"),
+            ("password=prefix&private-suffix host=db", "private-suffix"),
+            ("password=p,api_key= \\OPAQUE_BS", "OPAQUE_BS"),
+        ])
+
+    def test_scrub_recipient_next_to_a_secret(self):
+        # Recipient keys are found on the original text too, so a credential value cannot hide them.
+        self._assert_scrubbed([
+            ('{"password":null,"recipient":"Jane Q, 1 Main Rd"}', "1 Main Rd"),
+            ('{"recipient":null,"password":"x y SECRET_PII"}', "SECRET_PII"),
+            ("password=p,to=bob-handle x", "bob-handle"),
+        ])
 
 
 if __name__ == "__main__":
