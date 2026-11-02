@@ -65,6 +65,7 @@ MAX_INPUT_CHARS = 65536
 TRUNCATED = "...[truncated]"
 _TOKENS = re.compile(r"(\s+)")
 _NON_SPACE = re.compile(r"\S+")
+_SCHEME_SEP = re.compile("://")
 
 
 def _fail_closed(text: str) -> str:
@@ -132,6 +133,17 @@ def _value_end(text: str, start: int, nxt: list[int], last_quote: dict[str, list
     return max(ends)
 
 
+def _open_credential_url(word: str) -> bool:
+    # Per URL start, not only in aggregate: a nested URL's match must not vouch for an overlong
+    # outer one that runs to the same "@". Any "://" without a URL_PASSWORD match that still has an
+    # "@" after it is open (two URLs glued together with an "@" over-redact: fail closed).
+    matched = {m.start() + m.group().index("://") for m in _URL_PASSWORD.finditer(word)}
+    if word.count("@") != len(matched):
+        return True
+    last_at = word.rfind("@")
+    return any(m.start() not in matched and m.start() < last_at for m in _SCHEME_SEP.finditer(word))
+
+
 def _secret_spans(text: str) -> list[tuple[int, int]]:
     # Every pattern reads the original text and only reports what to redact; the spans are merged
     # at the end. So no pattern can rewrite or consume a key another one needs (a URL query that
@@ -147,7 +159,7 @@ def _secret_spans(text: str) -> list[tuple[int, int]]:
     for tok in _NON_SPACE.finditer(text):
         word = tok.group()
         open_url = "://" in word and (
-            word.count("@") != len(_URL_PASSWORD.findall(word)) or word.count("?") != len(_URL_QUERY.findall(word))
+            _open_credential_url(word) or word.count("?") != len(_URL_QUERY.findall(word))
         )
         open_jwt = "eyJ" in word and word.count(".") >= 2 and not _JWT.search(word)
         if open_url or open_jwt:

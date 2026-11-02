@@ -442,6 +442,13 @@ class SpanScrubberTests(unittest.TestCase):
             with self.subTest(text=text[-25:]):
                 self.assertNotIn("QQQQQQQQ", _sentry.scrub(text))
 
+    def test_scrub_nested_url_cannot_vouch_for_the_outer_one(self):
+        # a nested URL's match must not vouch for the overlong outer credential URL around it
+        self._assert_scrubbed([
+            ("dial postgresql://u:" + "S" * 600 + "https://v:p@h/db failed", "SSSSSSSSSS"),
+            ("dial postgresql://u:" + "S" * 600 + "x://a:b@c/d@h/db failed", "SSSSSSSSSS"),
+        ])
+
     def test_scrub_recipient_next_to_a_secret(self):
         # Recipient keys are found on the original text too, so a credential value cannot hide them.
         self._assert_scrubbed([
