@@ -66,6 +66,7 @@ TRUNCATED = "...[truncated]"
 _TOKENS = re.compile(r"(\s+)")
 _NON_SPACE = re.compile(r"\S+")
 _SCHEME_SEP = re.compile("://")
+_AT_HOST = re.compile(r"@[A-Za-z0-9.-]*")
 
 
 def _fail_closed(text: str) -> str:
@@ -152,8 +153,11 @@ def _secret_spans(text: str) -> list[tuple[int, int]]:
     spans = [(m.end("head"), m.end()) for m in _URL_PASSWORD.finditer(text)]
     spans += [(m.end("head") + 1, m.end()) for m in _URL_QUERY.finditer(text)]
     # A libpq value can run through a neighbouring field's "Bearer" label, so tokens are found here.
-    # A token that runs into "@" is an email's local part: the email pass takes the whole address.
-    spans += [m.span("token") for m in _BEARER_TOKEN.finditer(text) if not text.startswith("@", m.end("token"))]
+    # A token that runs into "@" (an email, or opaque@host) takes the "@host" part too, so neither
+    # the token nor the domain is left behind.
+    for m in _BEARER_TOKEN.finditer(text):
+        at = _AT_HOST.match(text, m.end("token"))
+        spans.append((m.start("token"), at.end() if at else m.end("token")))
     # A URL past the pattern bounds can still carry a password or a query, and a JWT can be too long
     # to match. Decide that here, on the original token: once another span or the IP pass redacts
     # part of it (token=x@h, a -192.0.2.1 tail), its "@", "?" or dots are gone.
