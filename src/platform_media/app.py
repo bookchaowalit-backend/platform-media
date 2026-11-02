@@ -11,7 +11,9 @@ from platform_backend_core import create_app as core_app
 from platform_backend_core import require_scope
 from psycopg.rows import dict_row
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+from starlette.middleware import Middleware
 
+from ._sentry import CaptureErrors
 from .adapters import ObjectStore
 
 LOG = logging.getLogger("platform_media")
@@ -119,6 +121,8 @@ def create_app(database, verifier, object_store: ObjectStore | None = None):
 
         object_store = configured_store()
     app = core_app("platform-media", database, verifier)
+    # Last in the list = innermost: inside the core boundary that turns errors into a 500.
+    app.user_middleware.append(Middleware(CaptureErrors))
     app.state.object_store = object_store
 
     app.router.routes[:] = [
