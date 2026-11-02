@@ -254,7 +254,9 @@ class HardeningTests(unittest.TestCase):
         ):
             start = time.perf_counter()
             out = _sentry.scrub(hostile + " password")
-            self.assertLess(time.perf_counter() - start, 0.5)
+            # Linear work takes about 0.3 s on a laptop and up to 2x that on a slow CI runner; a
+            # super-linear pattern on 64 KiB would take far longer.
+            self.assertLess(time.perf_counter() - start, 1.5)
             self.assertLessEqual(len(out), _sentry.MAX_SCRUB_CHARS + len(_sentry.TRUNCATED))
 
     def test_scrub_fails_closed_at_bounds_and_cap(self):
