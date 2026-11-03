@@ -482,6 +482,14 @@ class SpanScrubberTests(unittest.TestCase):
             ("password=x+66 81 234 5678 rejected", "234 5678"),
         ])
 
+    def test_scrub_phone_inside_an_email(self):
+        # a phone span inside an email's local part must not leave the rest of the address
+        for text in ("to alice+12025550123@customer.example x", "mail +15551234567@example.com x"):
+            with self.subTest(text=text):
+                out = _sentry.scrub(text)
+                self.assertNotIn("alice", out)
+                self.assertNotIn("example", out)
+
     def test_scrub_recipient_next_to_a_secret(self):
         # Recipient keys are found on the original text too, so a credential value cannot hide them.
         self._assert_scrubbed([
