@@ -7,7 +7,10 @@ service นี้ไม่มี UI: "user flow" คือลำดับกา�
 ```mermaid
 flowchart TD
   A1["Compute SHA256 of file, base64 encode"] --> A2["POST /v1/uploads with Idempotency-Key and JSON body"]
-  A2 -->|"201 or 200"| A3["Read upload.url and upload.headers"]
+  A2 -->|"201 or 200"| AS{"status in response"}
+  AS -->|"pending"| A3["Read upload.url and upload.headers"]
+  AS -->|"ready: replay after complete"| A6
+  AS -->|"deleting or deleted: no upload field"| AX5["Intent gone: new Idempotency-Key and new intent"]
   A2 -->|"409"| AX1["Payload differs for same key: use a new key"]
   A2 -->|"410"| AX2["Intent expired: new key"]
   A2 -->|"429"| AX3["1000 pending uploads in workspace: wait"]
