@@ -475,6 +475,13 @@ class SpanScrubberTests(unittest.TestCase):
         self.assertNotIn("345", out)
         self.assertNotIn("+12", out)
 
+    def test_scrub_phone_inside_a_url_query(self):
+        # the query span must not take the "+" a phone number needs to be recognised
+        self._assert_scrubbed([
+            ("GET https://example.test/search?q=+1 202 555 0123 failed", "555 0123"),
+            ("password=x+66 81 234 5678 rejected", "234 5678"),
+        ])
+
     def test_scrub_recipient_next_to_a_secret(self):
         # Recipient keys are found on the original text too, so a credential value cannot hide them.
         self._assert_scrubbed([
