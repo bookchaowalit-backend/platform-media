@@ -67,6 +67,7 @@ _TOKENS = re.compile(r"(\s+)")
 _NON_SPACE = re.compile(r"\S+")
 _SCHEME_SEP = re.compile("://")
 _AT_HOST = re.compile(r"@[A-Za-z0-9.-]*")
+_JWT_START = re.compile("eyJ")
 
 
 def _fail_closed(text: str) -> str:
@@ -145,6 +146,26 @@ def _open_credential_url(word: str) -> bool:
     return any(m.start() not in matched and m.start() < last_at for m in _SCHEME_SEP.finditer(word))
 
 
+def _open_jwt(word: str) -> bool:
+    # Each "eyJ" start on its own: a short valid JWT in the token must not vouch for an oversized
+    # one. A start outside every _JWT match with two dots after it is open. One pass over the
+    # starts and matches (both in order), so a token of many starts stays linear.
+    if "eyJ" not in word or word.count(".") < 2:
+        return False
+    matches = [m.span() for m in _JWT.finditer(word)]
+    i, last, dots_after = 0, 0, word.count(".")
+    for start in _JWT_START.finditer(word):
+        p = start.start()
+        dots_after -= word.count(".", last, p)
+        last = p
+        while i < len(matches) and matches[i][1] <= p:
+            i += 1
+        inside = i < len(matches) and matches[i][0] <= p
+        if not inside and dots_after >= 2:
+            return True
+    return False
+
+
 def _secret_spans(text: str) -> list[tuple[int, int]]:
     # Every pattern reads the original text and only reports what to redact; the spans are merged
     # at the end. So no pattern can rewrite or consume a key another one needs (a URL query that
@@ -166,7 +187,7 @@ def _secret_spans(text: str) -> list[tuple[int, int]]:
         open_url = "://" in word and (
             _open_credential_url(word) or word.count("?") != len(_URL_QUERY.findall(word))
         )
-        open_jwt = "eyJ" in word and word.count(".") >= 2 and not _JWT.search(word)
+        open_jwt = _open_jwt(word)
         if open_url or open_jwt:
             spans.append(tok.span())
     keys = list(_KV_KEY.finditer(text)) + list(_KV_PII_KEY.finditer(text))

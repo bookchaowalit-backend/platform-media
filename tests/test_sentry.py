@@ -464,6 +464,11 @@ class SpanScrubberTests(unittest.TestCase):
             ("auth Bearer TOKEN_Z@internal-host x", "internal-host"),
         ])
 
+    def test_scrub_each_jwt_candidate_is_checked_on_its_own(self):
+        # a short valid JWT in the same token must not vouch for an oversized one
+        out = _sentry.scrub("eyJabcdef." + "Q" * 5000 + "-192.0.2.1,password=eyJabcdef.abcdef.sig")
+        self.assertNotIn("QQQQQQQQ", out)
+
     def test_scrub_recipient_next_to_a_secret(self):
         # Recipient keys are found on the original text too, so a credential value cannot hide them.
         self._assert_scrubbed([
