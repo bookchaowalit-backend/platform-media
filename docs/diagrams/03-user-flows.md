@@ -15,10 +15,12 @@ flowchart TD
   A3 --> A4["PUT bytes to url with all signed headers"]
   A4 --> A5["POST /v1/uploads/id/complete"]
   A5 -->|"200 status=ready"| A6["Done"]
-  A5 -->|"409 mismatch"| A7["Fix bytes or headers, PUT again, complete again"]
+  A5 -->|"409 metadata mismatch, object missing"| A7["PUT the same bytes with all signed headers, complete again"]
+  A5 -->|"409 existing object mismatch or wrong content"| A9["DELETE /v1/files/id, then new intent with a new Idempotency-Key and corrected metadata and checksum"]
   A5 -->|"410"| AX2
   A5 -->|"503"| A8["Retry complete"]
   A7 --> A5
+  A9 --> A1
   A8 --> A5
 ```
 
