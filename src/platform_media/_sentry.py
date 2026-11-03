@@ -177,6 +177,8 @@ def _secret_spans(text: str) -> list[tuple[int, int]]:
     # A libpq value can run through a neighbouring field's "Bearer" label, so tokens are found here.
     # A token that runs into "@" (an email, or opaque@host) takes the "@host" part too, so neither
     # the token nor the domain is left behind.
+    # A phone number needs its leading "+", which a query or value span can take first.
+    spans += [m.span() for m in _PHONE.finditer(text)]
     for m in _BEARER_TOKEN.finditer(text):
         at = _AT_HOST.match(text, m.end("token"))
         spans.append((m.start("token"), at.end() if at else m.end("token")))
