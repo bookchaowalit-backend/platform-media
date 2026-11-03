@@ -48,6 +48,7 @@ _JWT = re.compile(r"\beyJ[A-Za-z0-9_-]{5,4096}\.[A-Za-z0-9_-]{5,4096}\.[A-Za-z0-
 _EMAIL = re.compile(r"[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}")
 # E.164-style phone numbers (+ and 7-15 digits, optional separators)
 _PHONE = re.compile(r"\+\d(?:[ -]?\d){6,14}\b")
+_PHONE_TAIL = re.compile(r"\+\d(?:[ -]?\d){0,14}$")
 _IPV4 = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
 _IPV6 = re.compile(r"(?i)\b(?:[0-9a-f]{1,4}:){3,7}[0-9a-f]{1,4}\b")
 # Compressed forms (2001:db8::1, fe80::1, ::1), also right after a colon (peer:2001:db8::1);
@@ -219,6 +220,10 @@ def scrub(text: str) -> str:
         head = text[:MAX_INPUT_CHARS]
         cut = max(head.rfind(" "), head.rfind("\n"), head.rfind("\t"))
         text = head[:cut] if cut > 0 else ""
+        # A phone number can span spaces, so the cut can leave a prefix too short for _PHONE.
+        tail = _PHONE_TAIL.search(text, max(0, len(text) - 64))
+        if tail:
+            text = text[: tail.start()]
     text = _redact(text, _secret_spans(text))
     # Emails first: "Bearer alice@example.com" must lose its domain too, not only the local part.
     text = _EMAIL.sub("***email***", text)

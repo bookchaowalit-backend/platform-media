@@ -469,6 +469,12 @@ class SpanScrubberTests(unittest.TestCase):
         out = _sentry.scrub("eyJabcdef." + "Q" * 5000 + "-192.0.2.1,password=eyJabcdef.abcdef.sig")
         self.assertNotIn("QQQQQQQQ", out)
 
+    def test_scrub_phone_split_by_the_input_cap(self):
+        # the pre-cap cut can leave a phone prefix below the pattern's minimum length; drop it
+        out = _sentry.scrub("password=" + "x" * 65517 + " +12 345 6789 end")
+        self.assertNotIn("345", out)
+        self.assertNotIn("+12", out)
+
     def test_scrub_recipient_next_to_a_secret(self):
         # Recipient keys are found on the original text too, so a credential value cannot hide them.
         self._assert_scrubbed([
