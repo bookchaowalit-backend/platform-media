@@ -38,8 +38,8 @@ def _edge_version(executable: Path) -> str:
 
         for key_name in (r"Software\Microsoft\Edge\BLBeacon", r"Software\WOW6432Node\Microsoft\Edge\BLBeacon"):
             try:
-                with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_name) as key:
-                    value, _ = winreg.QueryValueEx(key, "version")
+                with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_name) as key:  # type: ignore[attr-defined]  # Windows-only API; CI type-checks for Linux
+                    value, _ = winreg.QueryValueEx(key, "version")  # type: ignore[attr-defined]  # Windows-only API; CI type-checks for Linux
                     if value:
                         return str(value)
             except OSError:

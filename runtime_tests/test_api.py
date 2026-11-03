@@ -288,6 +288,7 @@ def test_authorization_is_from_real_verified_jwt_and_concrete_scope(runtime):
 
     import jwt
     from cryptography.hazmat.primitives.asymmetric import rsa
+    from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
     from platform_backend_core import TokenVerifier
 
     c, _db, ws, _store = runtime
@@ -295,7 +296,7 @@ def test_authorization_is_from_real_verified_jwt_and_concrete_scope(runtime):
     c.app.state.verifier = TokenVerifier(
         issuer="https://identity.example.invalid",
         audience="media-test",
-        public_key=key.public_key(),
+        public_key=key.public_key().public_bytes(Encoding.PEM, PublicFormat.SubjectPublicKeyInfo),
     )
     now = int(time.time())
     claims = {

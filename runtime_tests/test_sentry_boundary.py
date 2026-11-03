@@ -54,7 +54,7 @@ def test_a_server_500_reaches_sentry_scrubbed(monkeypatch):
         def broken(*args, **kwargs):
             raise RuntimeError(message)
         monkeypatch.setattr(_Database, 'transaction', broken)
-        with TestClient(create_app(_Database(), _Verifier(), object_store=object())) as c:
+        with TestClient(create_app(_Database(), _Verifier(), object_store=object())) as c:  # type: ignore[arg-type]  # never used: the database fails first
             r = c.get('/v1/files', headers={'Authorization': 'Bearer fixture'})
         assert r.status_code == 500 and r.json() == {'detail': 'internal server error'}
         sentry_sdk.flush()

@@ -281,7 +281,7 @@ def _cli(monkeypatch, capsys, env, store):
         cli.main()
         code = 0
     except SystemExit as exc:
-        code = exc.code
+        code = exc.code if isinstance(exc.code, int) else 1
     captured = capsys.readouterr()
     return code, captured.out + captured.err
 

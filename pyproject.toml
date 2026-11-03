@@ -12,6 +12,8 @@ dependencies = ["platform-backend-core>=0.1.0,<0.2", "uvicorn>=0.30,<1", "boto3>
 
 [project.optional-dependencies]
 test = ["pytest>=8,<10", "httpx>=0.27,<1"]
+# Lint, type check and coverage tools for CI (uv sync --frozen --all-extras).
+dev = ["mypy==2.4.0", "ruff==0.17.1", "pytest-cov==7.1.0"]
 
 [project.scripts]
 platform-media = "platform_media.__main__:main"
@@ -31,3 +33,35 @@ extend-immutable-calls = ["fastapi.Depends", "fastapi.Query", "fastapi.Header", 
 # Not on PyPI: lock the reviewed commit CI already installs, so the resolver can never
 # pick up a same-named PyPI package (dependency confusion).
 platform-backend-core = { git = "https://github.com/bookchaowalit-backend/platform-backend-core.git", rev = "21d5f44d26220080cbed43b9807979dc84a8533a" }
+
+[tool.coverage.run]
+source = ["src/platform_media", "book_media_platform", "scripts"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+
+[tool.ruff.lint]
+# Correctness-focused set (same as platform-data and the bookchaowalit Python cells).
+select = ["E9", "F", "I", "UP", "B"]
+
+[tool.mypy]
+python_version = "3.12"
+files = ["src", "book_media_platform", "scripts", "tests", "runtime_tests"]
+mypy_path = "src:.:scripts:runtime_tests"
+explicit_package_bases = true
+check_untyped_defs = true
+strict_equality = true
+warn_redundant_casts = true
+warn_unused_configs = true
+warn_unused_ignores = true
+
+[[tool.mypy.overrides]]
+# The pinned platform-backend-core commit ships no py.typed marker; analyse it anyway.
+module = ["platform_backend_core", "platform_backend_core.*"]
+follow_untyped_imports = true
+
+[[tool.mypy.overrides]]
+# boto3/botocore ship no type information (no py.typed, no bundled stubs).
+module = ["boto3", "botocore.*"]
+ignore_missing_imports = true

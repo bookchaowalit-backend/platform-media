@@ -131,7 +131,7 @@ class JobLockHeartbeatTests(unittest.TestCase):
         lock = _JobLock(self.lock_path)
         with lock:
             thread = lock._heartbeat
-            self.assertIsNotNone(thread)
+            assert thread is not None
             self.assertTrue(thread.is_alive())
         self.assertFalse(thread.is_alive())
 

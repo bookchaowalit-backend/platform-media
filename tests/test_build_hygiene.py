@@ -9,6 +9,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOWS = ROOT / ".github" / "workflows"
 CORE_PIN = re.compile(r"platform-backend-core\.git@([0-9a-f]{40})")
+# pyproject [tool.uv.sources] pins the core by `rev`; uv.lock records that rev and the resolved commit.
+SOURCE_REV = re.compile(r'platform-backend-core = \{ git = "[^"]+platform-backend-core\.git", rev = "([0-9a-f]{40})" \}')
+LOCKED = re.compile(r"platform-backend-core\.git\?rev=([0-9a-f]{40})#([0-9a-f]{40})")
 USES = re.compile(r"^\s*(?:-\s*)?uses:\s*['\"]?([^\s'\"#]+)", re.MULTILINE)
 PINNED = re.compile(r"^[^@\s]+@[0-9a-f]{40}$")
 
@@ -18,10 +21,12 @@ def unpinned_uses(text: str) -> list[str]:
     return [ref for ref in USES.findall(text) if not ref.startswith("./") and not PINNED.match(ref)]
 
 
-def workflow_core_commit() -> str:
-    commits = set(CORE_PIN.findall((WORKFLOWS / "shared-runtime.yml").read_text(encoding="utf-8")))
-    assert len(commits) == 1, commits
-    return commits.pop()
+def locked_core_commit() -> str:
+    """The core commit CI installs: uv sync --frozen takes it from uv.lock, which must match pyproject."""
+    sources = set(SOURCE_REV.findall((ROOT / "pyproject.toml").read_text(encoding="utf-8")))
+    locked = {commit for pair in LOCKED.findall((ROOT / "uv.lock").read_text(encoding="utf-8")) for commit in pair}
+    assert len(sources) == 1 and locked == sources, (sources, locked)
+    return sources.pop()
 
 
 def dockerfile_instructions() -> list[tuple[str, str]]:
@@ -75,7 +80,7 @@ class DockerfileTests(unittest.TestCase):
         self.assertGreaterEqual(sum(1 for keyword, _ in self.rows if keyword == "FROM"), 2)
 
     def test_core_comes_from_the_ci_pinned_commit(self) -> None:
-        self.assertEqual(set(CORE_PIN.findall(self.text)), {workflow_core_commit()})
+        self.assertEqual(set(CORE_PIN.findall(self.text)), {locked_core_commit()})
 
     def test_runtime_stage_is_non_root_and_serves(self) -> None:
         last_from = max(i for i, (keyword, _) in enumerate(self.rows) if keyword == "FROM")

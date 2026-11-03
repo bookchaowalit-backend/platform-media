@@ -99,10 +99,10 @@ def _pid_alive(pid: int) -> bool:
         # os.kill(pid, 0) would terminate the process on Windows; query it instead.
         import ctypes
 
-        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)  # type: ignore[attr-defined]  # Windows-only API; CI type-checks for Linux
         handle = kernel32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
         if not handle:
-            return ctypes.get_last_error() == 5  # ERROR_ACCESS_DENIED: exists, not ours
+            return ctypes.get_last_error() == 5  # type: ignore[attr-defined]  # ERROR_ACCESS_DENIED: exists, not ours
         try:
             code = ctypes.c_ulong()
             if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
@@ -326,7 +326,7 @@ class _JobLock:
                 if self._break_if_stale():
                     continue
                 if time.monotonic() >= deadline:
-                    raise GraphicsError("timed out waiting for the same graphics job to finish")
+                    raise GraphicsError("timed out waiting for the same graphics job to finish") from None
                 time.sleep(0.05)
             except OSError as exc:
                 raise GraphicsError("could not reserve a graphics job lock") from exc

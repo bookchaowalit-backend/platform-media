@@ -68,7 +68,7 @@ class GraphicsContractTests(unittest.TestCase):
         self.font_env.stop()
         self.temp.cleanup()
 
-    def write_spec(self, *, template: str = "quote-card", **overrides: object) -> Path:
+    def write_spec(self, *, template: object = "quote-card", **overrides: object) -> Path:
         spec: dict[str, object] = {
             "schema_version": "graphics.job.v1",
             "job_id": "thai-sample",
@@ -163,7 +163,7 @@ class GraphicsContractTests(unittest.TestCase):
 
     def test_render_revalidates_mutated_record_ids_before_using_them_as_paths(self) -> None:
         job = load_job(self.write_spec(variants=["square"]))
-        job.records[0]["id"] = "../escaped"
+        job.records[0]["id"] = "../escaped"  # type: ignore[index]  # mutates the loaded job on purpose
 
         with self.assertRaises(GraphicsError):
             render_batch(job, self.output, renderer=FakeRenderer())
@@ -173,7 +173,7 @@ class GraphicsContractTests(unittest.TestCase):
 
     def test_render_revalidates_mutated_brand_colors_before_svg_compilation(self) -> None:
         job = load_job(self.write_spec(variants=["square"]))
-        job.brand.colors["primary"] = '#123456" onload="alert(1)'
+        job.brand.colors["primary"] = '#123456" onload="alert(1)'  # type: ignore[index]  # mutates the loaded job on purpose
         renderer = FakeRenderer()
 
         with self.assertRaises(GraphicsError):
@@ -376,7 +376,7 @@ class GraphicsContractTests(unittest.TestCase):
         real_replace = os.replace
         attempts = 0
 
-        def replace_with_one_transient_lock(source: object, destination: object) -> None:
+        def replace_with_one_transient_lock(source: str, destination: str) -> None:
             nonlocal attempts
             if Path(source).is_dir() and attempts == 0:
                 attempts += 1

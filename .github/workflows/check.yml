@@ -24,7 +24,7 @@ jobs:
       python-version: ${{ matrix.python-version }}
       install-command: "true" # standard library only: the step just creates the venv for this Python
       format-check: false # follow-up: adopt ruff format
-      typecheck-command: "" # follow-up: add [tool.mypy]
+      typecheck-command: "" # stdlib-only here; mypy runs on the locked environment in shared-runtime.yml
       test-command: BOOK_MEDIA_SKIP_RENDERER_TESTS=1 bash scripts/check.sh # Edge renderer tests run locally only (tests/golden)
 
   security:

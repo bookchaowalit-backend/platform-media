@@ -11,6 +11,7 @@ import unittest
 import xml.etree.ElementTree as ET
 import zlib
 from pathlib import Path
+from typing import Any
 
 from book_media_platform.graphics.errors import GraphicsError
 from book_media_platform.graphics.fonts import find_font_file
@@ -75,7 +76,7 @@ class EdgeRendererIntegrationTests(unittest.TestCase):
         font_hash = hashlib.sha256(font_path.read_bytes()).hexdigest()
         golden_dir = Path(__file__).parent / "golden" / "graphics-v1a"
         manifest_path = golden_dir / "manifest.json"
-        templates: dict[str, dict[str, object]] = {
+        templates: dict[str, dict[str, Any]] = {
             "quote-card": {
                 "records": [
                     {
@@ -112,7 +113,7 @@ class EdgeRendererIntegrationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="graphics visual golden ") as temp_dir:
             root = Path(temp_dir)
             for template, template_data in templates.items():
-                job: dict[str, object] = {
+                job: dict[str, Any] = {
                     "schema_version": "graphics.job.v1",
                     "job_id": f"visual-{template}",
                     "template": template,
@@ -336,7 +337,7 @@ class EdgeRendererIntegrationTests(unittest.TestCase):
                 + chunk(b"IDAT", zlib.compress(b"\x00\x40\x90\xe0\xff"))
                 + chunk(b"IEND", b"")
             )
-            job = {
+            job: dict[str, Any] = {
                 "schema_version": "graphics.job.v1",
                 "job_id": "product-text-spacing",
                 "template": "product-card",

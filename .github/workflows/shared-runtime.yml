@@ -35,10 +35,18 @@ jobs:
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.12"
-      - name: Install reviewed shared core and service tests
+      # The locked environment: uv.lock pins every dependency, platform-backend-core to the
+      # reviewed Git commit in [tool.uv.sources] (tests/test_build_hygiene.py keeps the
+      # Dockerfile on the same commit).
+      - name: Install the locked environment (uv.lock)
         run: |
-          python -m pip install 'platform-backend-core @ git+https://github.com/bookchaowalit-backend/platform-backend-core.git@21d5f44d26220080cbed43b9807979dc84a8533a'
-          python -m pip install -e '.[test]'
+          python -m pip install uv==0.13.1
+          uv sync --frozen --all-extras --python 3.12
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
+      - name: Lint and type check
+        run: |
+          ruff check --output-format=github .
+          mypy .
       - name: Report optional renderer environment unavailable
         run: |
           cat >> "$GITHUB_STEP_SUMMARY" <<'SUMMARY'
@@ -51,10 +59,12 @@ jobs:
           SUMMARY
       - name: Run original schema and graphics contract checks
         run: bash scripts/check.sh
+      # Ratchet: measured 72.92% on 2026-11-03 with the Edge renderer cases skipped
+      # (ADR-0004: threshold = measured, rounded down).
       - name: Test media API and graphics contracts with explicit renderer skips
-        run: python -m pytest -q -rs
+        run: python -m pytest -q -rs --cov --cov-report=term --cov-fail-under=72
       - name: Build service wheel
-        run: python -m pip wheel --no-deps --wheel-dir dist .
+        run: uv build --wheel --out-dir dist .
   image:
     # Proves the Dockerfile builds from a clean checkout. Nothing is pushed or deployed.
     # The image serves the media API; the optional Edge renderer is not in it (docs/runtime.md).
