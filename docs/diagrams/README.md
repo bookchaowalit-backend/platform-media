@@ -34,6 +34,8 @@ presigned upload) บน Railway serverless และ Graphics V1A CLI ที่
 | 21 | Incident response | done | [21-incident-response.md](21-incident-response.md) | `docs/runtime.md`, `_sentry.py`, ops record, central ADR-0002 |
 | 22 | DORA | done (2 partial, 2 proxy, 1 not computable) | [22-dora.md](22-dora.md) | `git log`, `gh pr list`, `gh run list`, ops record |
 
+สรุปสถาปัตยกรรมระดับ docpack: [`DOCPACK/02-architecture.md`](../../DOCPACK/02-architecture.md) (2026-11-04)
+
 ## ADR list
 
 - [ADR-0001](08-adr/ADR-0001-fastapi-on-shared-platform-backend-core.md) FastAPI บน platform-backend-core ที่ pin `21d5f44`
