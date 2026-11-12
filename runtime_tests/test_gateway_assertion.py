@@ -32,9 +32,7 @@ T0 = 1793700000
 
 
 def test_the_key_is_derived_per_system_like_the_gateway():
-    assert (
-        hmac.new(MASTER, b"gateway-assertion/v1/habits", hashlib.sha256).digest() == KEY
-    )
+    assert hmac.new(MASTER, b"gateway-assertion/v1/habits", hashlib.sha256).digest() == KEY
 
 
 def test_matches_the_gateway_reference():
@@ -42,14 +40,9 @@ def test_matches_the_gateway_reference():
     assert expected(KEY, "habits", get[0], get[1], T0, "req.1:a", get[2]) == VECTOR
     assert check(KEY, "habits", VECTOR, *get, now=T0) == "valid"
     assert check(KEY, "habits", VECTOR, *get, now=T0 + 61) == "invalid"
-    assert (
-        check(KEY, "health", VECTOR, *get, now=T0) == "invalid"
-    )  # another system's assertion
+    assert check(KEY, "health", VECTOR, *get, now=T0) == "invalid"  # another system's assertion
     assert check(KEY, "habits", VECTOR, "POST", *get[1:], now=T0) == "invalid"
-    assert (
-        check(KEY, "habits", VECTOR, "GET", "/v1/habits", "Bearer t", now=T0)
-        == "invalid"
-    )
+    assert check(KEY, "habits", VECTOR, "GET", "/v1/habits", "Bearer t", now=T0) == "invalid"
     assert check(KEY, "habits", VECTOR, "GET", get[1], "Bearer u", now=T0) == "invalid"
     assert check(KEY, "habits", None, *get, now=T0) == "missing"
     assert check(KEY, "habits", "v1.x", *get, now=T0) == "invalid"
@@ -69,10 +62,7 @@ def test_matches_the_gateway_reference():
         )
         == POST_VECTOR
     )
-    assert (
-        check(KEY, "habits", POST_VECTOR, *post, T0, "application/json", body)
-        == "valid"
-    )
+    assert check(KEY, "habits", POST_VECTOR, *post, T0, "application/json", body) == "valid"
     assert (
         check(
             KEY,
@@ -203,9 +193,7 @@ def test_enforce_mode_refuses_direct_calls_but_not_probes(caplog):
     assert direct.status_code == 403
     assert direct.json() == {"error": "gateway_required"}
     assert client.get("/health").status_code == 200
-    assert results(caplog) == [
-        "gateway_assertion result=missing method=GET path=/v1/items"
-    ]
+    assert results(caplog) == ["gateway_assertion result=missing method=GET path=/v1/items"]
     via = client.get(
         "/v1/items",
         headers={
@@ -273,3 +261,51 @@ def test_main_installs_the_check_with_the_route_key():
     source = Path(entry.__file__).read_text()
     assert "gateway.install(app, gateway.GatewayCheck.from_env('platform-media'))" in source
     assert source.index("gateway.install(app") < source.index("uvicorn.run(")
+
+
+SYSTEM_FOR_ADDON = "addon-test"
+
+
+def test_probe_paths_and_a_trailing_slash_stay_open():
+    for path in ("/health", "/healthz", "/ready", "/readyz", "/health/", "/healthz/", "/.well-known/jwks.json"):
+        assert gw.is_open(path), path
+    for path in ("/healthcheck", "/ready-now", "/v1/health"):
+        assert not gw.is_open(path), path
+
+
+def test_a_stalled_body_is_answered_408_and_not_waited_on(monkeypatch):
+    import asyncio
+
+    monkeypatch.setattr(gw, "BODY_TIMEOUT_SECONDS", 0.2)
+    app = FastAPI()
+    gw.install(app, GatewayCheck(SYSTEM_FOR_ADDON, "report", KEY))
+
+    @app.post("/v1/items")
+    async def items() -> dict[str, str]:
+        return {"ok": "served"}
+
+    header = gw.expected(KEY, SYSTEM_FOR_ADDON, "POST", "/v1/items", int(time.time()), "req-9", "")
+    sent: list[dict[str, object]] = []
+
+    async def receive() -> dict[str, object]:
+        await asyncio.sleep(5)  # the client never sends its body
+        return {"type": "http.disconnect"}
+
+    async def send(message: dict[str, object]) -> None:
+        sent.append(message)
+
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0"},
+        "http_version": "1.1",
+        "method": "POST",
+        "scheme": "http",
+        "path": "/v1/items",
+        "raw_path": b"/v1/items",
+        "query_string": b"",
+        "headers": [(b"x-gateway-assertion", header.encode()), (b"content-length", b"10")],
+        "client": ("127.0.0.1", 1),
+        "server": ("test", 80),
+    }
+    asyncio.run(asyncio.wait_for(app(scope, receive, send), 3))
+    assert sent[0]["status"] == 408
