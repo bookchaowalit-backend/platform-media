@@ -1,12 +1,12 @@
-# SPEC-003 — Orphan sweep serves every workspace
+# SPEC-001 — Orphan sweep serves every workspace
 
 Standard: ADR-0004 — TDD + SDD.
 
 | Field | Value |
 |---|---|
-| Spec ID / version | SPEC-003 / 0.1 |
+| Spec ID / version | SPEC-001 / 0.1 |
 | Status | **draft**, waiting for owner approval |
-| Repository / path | bookchaowalit-backend/platform-media / `docs/SPEC-003-MULTI-WORKSPACE-SWEEP.md` |
+| Repository / path | bookchaowalit-backend/platform-media / `docs/SPEC-001-MULTI-WORKSPACE-SWEEP.md` |
 | Owner (maker) | Claude Code |
 | Approver | Owner (bookchaowalit) |
 | Requirement links | SaaS gap review 2026-11-11, item 2; platform-identity SPEC-006 |
@@ -44,7 +44,7 @@ Standard: ADR-0004 — TDD + SDD.
 
 ## 4. Interfaces and data
 
-- New migration with `media_sweep_workspaces`, the same pattern as communication SPEC-003 §4.
+- New migration with `media_sweep_workspaces`, the same pattern as communication SPEC-001 §4.
 - Env: `MEDIA_WORKSPACE_ID` becomes optional.
 - Output stays `swept=… failed=… skipped=… more=…`, with totals across workspaces, and no workspace ids.
 
