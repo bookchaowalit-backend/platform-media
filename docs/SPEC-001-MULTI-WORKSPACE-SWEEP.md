@@ -5,7 +5,7 @@ Standard: ADR-0004 — TDD + SDD.
 | Field | Value |
 |---|---|
 | Spec ID / version | SPEC-001 / 0.2 |
-| Status | **in review**: checker R1 revise → 0.2; waiting for R2, then owner approval |
+| Status | **in review**: checker R1 revise → 0.2; **R2 pass**; waiting for owner approval |
 | Repository / path | bookchaowalit-backend/platform-media / `docs/SPEC-001-MULTI-WORKSPACE-SWEEP.md` |
 | Owner (maker) | Claude Code |
 | Approver | Owner (bookchaowalit) |
