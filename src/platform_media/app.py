@@ -7,6 +7,7 @@ from uuid import UUID, uuid4
 
 from fastapi import Depends, Header, HTTPException, Query, Response
 from fastapi.responses import JSONResponse
+from fastapi.routing import APIRoute
 from platform_backend_core import create_app as core_app
 from platform_backend_core import require_scope
 from psycopg.rows import dict_row
@@ -27,6 +28,9 @@ READINESS_PERMISSIONS = {
 # Content-type gate (fixtures/gates/media-content-type.json): completion reads only
 # this many leading bytes and requires them to match the declared type.
 SIGNATURE_BYTES = 16
+
+# Not public: the docs UI, and metrics (re-added below behind metrics:read). /openapi.json stays public.
+NOT_PUBLIC = frozenset({"/docs", "/docs/oauth2-redirect", "/redoc", "/metrics"})
 
 
 def _png(prefix):
@@ -124,6 +128,17 @@ def create_app(database, verifier, object_store: ObjectStore | None = None):
     # Last in the list = innermost: inside the core boundary that turns errors into a 500.
     app.user_middleware.append(Middleware(CaptureErrors))
     app.state.object_store = object_store
+    # Only probes, the API and its schema are public: no docs UI, and metrics need a scope.
+    metrics = next(r.endpoint for r in app.router.routes if isinstance(r, APIRoute) and r.path == "/metrics")
+    app.router.routes[:] = [r for r in app.router.routes if getattr(r, "path", None) not in NOT_PUBLIC]
+    app.docs_url = app.redoc_url = None
+    app.add_api_route(
+        "/metrics",
+        metrics,
+        methods=["GET"],
+        include_in_schema=False,
+        dependencies=[Depends(require_scope("metrics:read"))],
+    )
 
     app.router.routes[:] = [
         r for r in app.router.routes if getattr(r, "path", None) != "/readyz"

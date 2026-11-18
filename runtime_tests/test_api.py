@@ -220,6 +220,31 @@ def test_readiness_requires_provider_and_migrated_rls_schema():
         assert c.get("/readyz").status_code == 503
 
 
+def test_docs_ui_is_not_served_and_metrics_needs_metrics_read():
+    from platform_backend_core import AuthenticationError, Principal
+
+    from platform_media import create_app
+
+    class ScopedVerifier:
+        def verify(self, authorization):
+            if authorization == "Bearer metrics":
+                return Principal(uuid4(), uuid4(), frozenset(["metrics:read"]))
+            if authorization == "Bearer files":
+                return Principal(uuid4(), uuid4(), frozenset(["files:read", "files:write"]))
+            raise AuthenticationError("authentication required")
+
+    with TestClient(create_app(DisabledDatabase(), ScopedVerifier())) as c:
+        # The docs UI is gone; the OpenAPI schema stays public for the MCP hub's describe_cell.
+        for path in ("/docs", "/docs/oauth2-redirect", "/redoc"):
+            assert c.get(path).status_code == 404, path
+        assert c.get("/openapi.json").status_code == 200
+        assert c.get("/healthz").status_code == 200
+        # /metrics needs a verified token carrying metrics:read.
+        assert c.get("/metrics").status_code == 401
+        assert c.get("/metrics", headers={"Authorization": "Bearer files"}).status_code == 403
+        assert c.get("/metrics", headers={"Authorization": "Bearer metrics"}).status_code == 200
+
+
 def test_actual_s3_adapter_binds_conditional_put_length_type_checksum_and_expiry():
     from urllib.parse import parse_qs, urlsplit
 

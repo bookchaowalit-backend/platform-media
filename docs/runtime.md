@@ -23,7 +23,8 @@ privileged roles. Tenant tables ENABLE and FORCE RLS even for their owner.
 `MEDIA_WORKSPACE_ID`; see "Orphan-object sweeper".
 
 `python -m platform_media serve` listens on `PORT` (default 8080), exposes
-`/healthz`, `/readyz`, `/metrics` and `/docs`. Required configuration:
+`/healthz` and `/readyz` (public probes) and `/openapi.json` (public, read by the MCP hub). The docs UI
+(`/docs`, `/redoc`) is not served; `/metrics` needs a bearer token with the `metrics:read` scope. Required configuration:
 
 | Name | Purpose |
 |---|---|
@@ -273,7 +274,7 @@ pinned in the `Dockerfile`, there is no unpinned core default). Run non-root,
 with one bounded process per container, concurrency 64, pool max 8 by default,
 request timeout 30s, provider connect/read 3s/5s and one retry. Supply private
 DB network access and outbound HTTPS only to the configured object endpoint/JWKS.
-Protect `/metrics` with platform ingress controls. Disable reverse-proxy access
+`/metrics` requires the `metrics:read` scope; still protect it with platform ingress controls. Disable reverse-proxy access
 logging of headers/bodies/query strings; keep generated route/correlation logs.
 
 Before deployment: back up the service DB and metadata, migrate explicitly,

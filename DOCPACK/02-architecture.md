@@ -68,7 +68,7 @@ flowchart LR
 
 | Container / module | เทคโนโลยี | หน้าที่ | หลักฐาน |
 |---|---|---|---|
-| media API (`serve`) | Python 3.12, FastAPI, uvicorn, core `21d5f44` | `/v1/uploads`, `/v1/uploads/{id}/complete`, `/v1/files`, `/v1/files/{id}`, `/v1/files/{id}/download`, `DELETE /v1/files/{id}`, `/healthz`, `/readyz` (override), `/metrics` | `app.py`, `__main__.py` |
+| media API (`serve`) | Python 3.12, FastAPI, uvicorn, core `21d5f44` | `/v1/uploads`, `/v1/uploads/{id}/complete`, `/v1/files`, `/v1/files/{id}`, `/v1/files/{id}/download`, `DELETE /v1/files/{id}`, `/healthz`, `/readyz` (override), `/openapi.json` (public), `/metrics` (scope `metrics:read`); `/docs` and `/redoc` ไม่ถูก serve | `app.py`, `__main__.py` |
 | `migrate` | CLI ใน image เดียวกัน | apply `001-media`, `002-media-sweep` ด้วย `DATABASE_MIGRATION_DSN` (owner role); `serve` ไม่ migrate เอง | `migrations.py`, `__main__.py` |
 | `sweep` | CLI | ลบ orphan object ของ upload ที่หมดอายุ ทีละ batch ต่อ `MEDIA_WORKSPACE_ID` | `sweeper.py` |
 | `adapters.S3ObjectStore` | boto3 S3v4 | presign PUT/GET, HEAD, ranged GET, delete; ต้องมี credential explicit + HTTPS endpoint | `adapters.py`, `config.py` |
